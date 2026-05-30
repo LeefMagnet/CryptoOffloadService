@@ -177,6 +177,74 @@ pub mod test_support {
         Ok(pkey.public_key_to_pem()?)
     }
 
+    /// 生成 SCEP PKIO 测试报文：外层 SignedData（wrapper 签名）+ 内层 EnvelopedData（3DES，CA 解密）。
+    /// 返回 `(pkio_der, csr_der, wrapper_cert_der)`。
+    pub fn generate_scep_pkio(ca_cert: &X509) -> anyhow::Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+        use openssl::bn::BigNum;
+        use openssl::pkcs7::{Pkcs7, Pkcs7Flags};
+        use openssl::stack::Stack;
+        use openssl::symm::Cipher;
+        use openssl::x509::X509Req;
+
+        let wrapper_key = {
+            let rsa = Rsa::generate(2048)?;
+            PKey::from_rsa(rsa)?
+        };
+        let wrapper_cert = {
+            let mut name = X509NameBuilder::new()?;
+            name.append_entry_by_text("CN", "scep-bench-wrapper")?;
+            let name = name.build();
+            let mut builder = X509Builder::new()?;
+            builder.set_version(2)?;
+            builder.set_subject_name(&name)?;
+            builder.set_issuer_name(&name)?;
+            builder.set_pubkey(&wrapper_key)?;
+            let not_before = Asn1Time::days_from_now(0)?;
+            let not_after = Asn1Time::days_from_now(365)?;
+            builder.set_not_before(&not_before)?;
+            builder.set_not_after(&not_after)?;
+            builder.sign(&wrapper_key, MessageDigest::sha256())?;
+            builder.build()
+        };
+
+        let csr_der = {
+            let client_key = {
+                let rsa = Rsa::generate(2048)?;
+                PKey::from_rsa(rsa)?
+            };
+            let mut name = X509NameBuilder::new()?;
+            name.append_entry_by_text("CN", "scep-bench-client")?;
+            let name = name.build();
+            let mut req_builder = X509Req::builder()?;
+            req_builder.set_subject_name(&name)?;
+            req_builder.set_pubkey(&client_key)?;
+            req_builder.sign(&client_key, MessageDigest::sha256())?;
+            req_builder.build().to_der()?
+        };
+
+        let mut recipients = Stack::new()?;
+        recipients.push(ca_cert.clone())?;
+        let enveloped = Pkcs7::encrypt(
+            &recipients,
+            &csr_der,
+            Cipher::des_ede3_cbc(),
+            Pkcs7Flags::BINARY,
+        )?;
+        let enveloped_der = enveloped.to_der()?;
+
+        let certs = Stack::new()?;
+        let outer = Pkcs7::sign(
+            &wrapper_cert,
+            &wrapper_key,
+            &certs,
+            &enveloped_der,
+            Pkcs7Flags::BINARY,
+        )?;
+        let pkio_der = outer.to_der()?;
+        let wrapper_cert_der = wrapper_cert.to_der()?;
+        Ok((pkio_der, csr_der, wrapper_cert_der))
+    }
+
     pub fn free_port() -> SocketAddr {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         listener.local_addr().expect("local_addr")

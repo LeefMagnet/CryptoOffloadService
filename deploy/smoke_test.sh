@@ -53,6 +53,9 @@ run_bench cms-verify 200
 run_bench cms-build-parse 100
 run_bench scep-certrep-success 200
 run_bench scep-certrep-failure 200
+run_bench scep-parse-request 200
+run_bench scep-certrep-verify 200
+run_bench scep-parse-build-success 100
 
 echo ""
 echo "==> ALL SMOKE TESTS PASSED"

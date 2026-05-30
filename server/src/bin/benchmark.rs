@@ -27,7 +27,7 @@ use cryptooffload::v1::sign_service_client::SignServiceClient;
 use cryptooffload::v1::{
     BuildCmsRequest, BuildScepFailureCertRepRequest, BuildScepSuccessCertRepRequest,
     HashAlgorithm, ImportKeyRequest, KeyFormat, KeyKind, KeyLifetime, ParseCmsRequest,
-    SignAlgorithm, SignRequest, VerifyCmsRequest, VerifyRequest,
+    ParseScepRequestRequest, SignAlgorithm, SignRequest, VerifyCmsRequest, VerifyRequest,
 };
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -50,6 +50,12 @@ enum BenchMode {
     ScepCertrepSuccess,
     /// SCEP FAILURE CertRep（pkiStatus=2，无 Envelop）
     ScepCertrepFailure,
+    /// SCEP ParseRequest：验外层 SignedData + 解密 Envelop → csr_der + wrapper_cert_der
+    ScepParseRequest,
+    /// SCEP SUCCESS CertRep CMS 验签（CmsService.Verify + CA 证书）
+    ScepCertrepVerify,
+    /// ParseRequest + BuildSuccessCertRep 组合
+    ScepParseBuildSuccess,
 }
 
 #[derive(Debug, Parser)]
@@ -86,8 +92,11 @@ struct BenchKeys {
     ed25519_private_key_id: String,
     ed25519_public_key_id: String,
     ca_key_id: String,
+    ca_cert_key_id: String,
     issued_cert_der: Vec<u8>,
     wrapper_cert_der: Vec<u8>,
+    scep_pkio_der: Vec<u8>,
+    scep_success_certrep_der: Vec<u8>,
     recipient_nonce: Vec<u8>,
 }
 
@@ -268,8 +277,11 @@ impl BenchKeys {
             ed25519_private_key_id: self.ed25519_private_key_id.clone(),
             ed25519_public_key_id: self.ed25519_public_key_id.clone(),
             ca_key_id: self.ca_key_id.clone(),
+            ca_cert_key_id: self.ca_cert_key_id.clone(),
             issued_cert_der: self.issued_cert_der.clone(),
             wrapper_cert_der: self.wrapper_cert_der.clone(),
+            scep_pkio_der: self.scep_pkio_der.clone(),
+            scep_success_certrep_der: self.scep_success_certrep_der.clone(),
             recipient_nonce: self.recipient_nonce.clone(),
         }
     }
@@ -279,6 +291,7 @@ async fn prepare_keys(channel: &Channel, args: &Args, payload: &[u8]) -> Result<
     let mut key_client = KeyServiceClient::new(channel.clone());
     let mut sign_client = SignServiceClient::new(channel.clone());
     let mut cms_client = CmsServiceClient::new(channel.clone());
+    let mut scep_client = ScepServiceClient::new(channel.clone());
 
     let (priv_pem, cert_der) = load_or_generate_key_material(args)?;
 
@@ -295,10 +308,12 @@ async fn prepare_keys(channel: &Channel, args: &Args, payload: &[u8]) -> Result<
     )
     .await?;
 
-    // SCEP: CA + issued + wrapper（三份独立 RSA 证书）
+    // SCEP: CA + PKIO fixture + issued cert
     let (ca_pem, ca_cert_der) = generate_rsa2048_pem()?;
+    let ca_cert = X509::from_der(&ca_cert_der).context("parse CA cert")?;
+    let (scep_pkio_der, _expected_csr, pkio_wrapper_cert_der) =
+        crypto_offload_server::test_support::generate_scep_pkio(&ca_cert)?;
     let (_issued_pem, issued_cert_der) = generate_rsa2048_pem()?;
-    let (_wrapper_pem, wrapper_cert_der) = generate_rsa2048_pem()?;
     let ca_meta = import_private(
         &mut key_client,
         ca_pem,
@@ -307,6 +322,26 @@ async fn prepare_keys(channel: &Channel, args: &Args, payload: &[u8]) -> Result<
         KeyFormat::Der,
     )
     .await?;
+    let ca_cert_meta = import_certificate(
+        &mut key_client,
+        ca_cert_der.clone(),
+        "bench-scep-ca-cert",
+    )
+    .await?;
+
+    let recipient_nonce = vec![0x01, 0x02, 0x03, 0x04];
+    let scep_success_certrep_der = scep_client
+        .build_success_cert_rep(BuildScepSuccessCertRepRequest {
+            ca_key_id: ca_meta.key_id.clone(),
+            transaction_id: "bench-tx-success".into(),
+            recipient_nonce: recipient_nonce.clone(),
+            issued_cert_der: issued_cert_der.clone(),
+            wrapper_cert_der: pkio_wrapper_cert_der.clone(),
+            ..Default::default()
+        })
+        .await?
+        .into_inner()
+        .certrep_der;
 
     // Ed25519
     let ed25519_pem = generate_ed25519_pem()?;
@@ -378,9 +413,12 @@ async fn prepare_keys(channel: &Channel, args: &Args, payload: &[u8]) -> Result<
         ed25519_private_key_id: ed25519_priv.key_id,
         ed25519_public_key_id: ed25519_pub.key_id,
         ca_key_id: ca_meta.key_id,
+        ca_cert_key_id: ca_cert_meta.key_id,
         issued_cert_der,
-        wrapper_cert_der,
-        recipient_nonce: vec![0x01, 0x02, 0x03, 0x04],
+        wrapper_cert_der: pkio_wrapper_cert_der,
+        scep_pkio_der,
+        scep_success_certrep_der,
+        recipient_nonce,
     })
 }
 
@@ -432,6 +470,30 @@ async fn import_public(
         .into_inner()
         .metadata
         .context("import public key")?;
+    Ok(ImportedKey {
+        key_id: meta.key_id,
+    })
+}
+
+async fn import_certificate(
+    client: &mut KeyServiceClient<Channel>,
+    cert_der: Vec<u8>,
+    label: &str,
+) -> Result<ImportedKey> {
+    let meta = client
+        .import_key(ImportKeyRequest {
+            kind: KeyKind::Certificate as i32,
+            lifetime: KeyLifetime::Permanent as i32,
+            format: KeyFormat::Der as i32,
+            certificate_data: cert_der,
+            certificate_format: KeyFormat::Der as i32,
+            label: label.into(),
+            ..Default::default()
+        })
+        .await?
+        .into_inner()
+        .metadata
+        .context("import certificate")?;
     Ok(ImportedKey {
         key_id: meta.key_id,
     })
@@ -642,6 +704,43 @@ async fn run_one(channel: &Channel, mode: BenchMode, keys: &BenchKeys) -> Result
                     recipient_nonce: keys.recipient_nonce.clone(),
                     fail_info: 2,
                     fail_info_text: "benchmark bad request".into(),
+                    ..Default::default()
+                })
+                .await?;
+        }
+        BenchMode::ScepParseRequest => {
+            ScepServiceClient::new(channel.clone())
+                .parse_request(ParseScepRequestRequest {
+                    scep_der: keys.scep_pkio_der.clone(),
+                    ca_key_id: keys.ca_key_id.clone(),
+                })
+                .await?;
+        }
+        BenchMode::ScepCertrepVerify => {
+            CmsServiceClient::new(channel.clone())
+                .verify(VerifyCmsRequest {
+                    cms_der: keys.scep_success_certrep_der.clone(),
+                    verify_key_id: keys.ca_cert_key_id.clone(),
+                    ..Default::default()
+                })
+                .await?;
+        }
+        BenchMode::ScepParseBuildSuccess => {
+            let mut scep = ScepServiceClient::new(channel.clone());
+            let parsed = scep
+                .parse_request(ParseScepRequestRequest {
+                    scep_der: keys.scep_pkio_der.clone(),
+                    ca_key_id: keys.ca_key_id.clone(),
+                })
+                .await?
+                .into_inner();
+            let _ = scep
+                .build_success_cert_rep(BuildScepSuccessCertRepRequest {
+                    ca_key_id: keys.ca_key_id.clone(),
+                    transaction_id: "bench-tx-parse-build".into(),
+                    recipient_nonce: keys.recipient_nonce.clone(),
+                    issued_cert_der: keys.issued_cert_der.clone(),
+                    wrapper_cert_der: parsed.wrapper_cert_der,
                     ..Default::default()
                 })
                 .await?;

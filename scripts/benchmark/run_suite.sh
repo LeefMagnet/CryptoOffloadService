@@ -63,6 +63,7 @@ run_mode() {
     sign-ed25519 sign-verify-ed25519
     cms-build cms-parse cms-verify cms-build-parse
     scep-certrep-success scep-certrep-failure
+    scep-parse-request scep-certrep-verify scep-parse-build-success
     import-key
   )
   for mode in "${MODES[@]}"; do

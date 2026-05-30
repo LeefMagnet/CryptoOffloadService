@@ -67,6 +67,9 @@ run cms-verify 100
 run cms-build-parse 50
 run scep-certrep-success 100
 run scep-certrep-failure 100
+run scep-parse-request 100
+run scep-certrep-verify 100
+run scep-parse-build-success 50
 
 echo ""
 echo "==> ALL WSL SMOKE TESTS PASSED"

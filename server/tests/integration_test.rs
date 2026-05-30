@@ -7,10 +7,15 @@ use crypto_offload_server::cryptooffload::v1::sign_service_client::SignServiceCl
 use crypto_offload_server::cryptooffload::v1::{
     BuildCmsRequest, BuildScepFailureCertRepRequest, BuildScepSuccessCertRepRequest,
     GetKeyInfoRequest, HashAlgorithm, ImportKeyRequest, KeyFormat, KeyKind, KeyLifetime,
-    ListKeysRequest, SignAlgorithm, SignRequest, VerifyCmsRequest, VerifyRequest,
+    ListKeysRequest, ParseScepRequestRequest, SignAlgorithm, SignRequest, VerifyCmsRequest,
+    VerifyRequest,
 };
 use crypto_offload_server::run_server;
-use crypto_offload_server::test_support::{extract_public_pem, free_port, generate_rsa2048_der_cert, generate_rsa2048_pem};
+use crypto_offload_server::test_support::{
+    extract_public_pem, free_port, generate_rsa2048_der_cert, generate_rsa2048_pem,
+    generate_scep_pkio,
+};
+use openssl::x509::X509;
 use tokio::time::{sleep, Duration};
 
 async fn start_test_server() -> String {
@@ -451,4 +456,125 @@ async fn grpc_scep_success_certrep() {
         .expect("build success certrep")
         .into_inner();
     assert!(!resp.certrep_der.is_empty());
+}
+
+#[tokio::test]
+async fn grpc_scep_parse_request() {
+    let url = start_test_server().await;
+    let channel = tonic::transport::Channel::from_shared(url)
+        .unwrap()
+        .connect()
+        .await
+        .expect("connect");
+
+    let (ca_pem, ca_der) = generate_rsa2048_der_cert().expect("ca");
+    let ca_cert = X509::from_der(&ca_der).expect("ca cert");
+    let (pkio_der, expected_csr, expected_wrapper) =
+        generate_scep_pkio(&ca_cert).expect("pkio fixture");
+
+    let mut key_client = KeyServiceClient::new(channel.clone());
+    let mut scep_client = ScepServiceClient::new(channel);
+
+    let ca = key_client
+        .import_key(ImportKeyRequest {
+            kind: KeyKind::Private as i32,
+            lifetime: KeyLifetime::Permanent as i32,
+            format: KeyFormat::Pem as i32,
+            key_data: ca_pem,
+            certificate_data: ca_der,
+            certificate_format: KeyFormat::Der as i32,
+            ..Default::default()
+        })
+        .await
+        .expect("import ca")
+        .into_inner();
+    let ca_id = ca.metadata.expect("metadata").key_id;
+
+    let parsed = scep_client
+        .parse_request(ParseScepRequestRequest {
+            scep_der: pkio_der,
+            ca_key_id: ca_id,
+        })
+        .await
+        .expect("parse scep")
+        .into_inner();
+
+    assert_eq!(parsed.csr_der, expected_csr);
+    assert_eq!(parsed.wrapper_cert_der, expected_wrapper);
+}
+
+#[tokio::test]
+async fn grpc_scep_certrep_verify() {
+    let url = start_test_server().await;
+    let channel = tonic::transport::Channel::from_shared(url)
+        .unwrap()
+        .connect()
+        .await
+        .expect("connect");
+
+    let (ca_pem, ca_der) = generate_rsa2048_der_cert().expect("ca");
+    let ca_cert = X509::from_der(&ca_der).expect("ca cert");
+    let (_pkio, _csr, wrapper_der) = generate_scep_pkio(&ca_cert).expect("wrapper");
+    let (_issued_pem, issued_der) = generate_rsa2048_der_cert().expect("issued");
+
+    let mut key_client = KeyServiceClient::new(channel.clone());
+    let mut scep_client = ScepServiceClient::new(channel.clone());
+    let mut cms_client = CmsServiceClient::new(channel);
+
+    let ca = key_client
+        .import_key(ImportKeyRequest {
+            kind: KeyKind::Private as i32,
+            lifetime: KeyLifetime::Permanent as i32,
+            format: KeyFormat::Pem as i32,
+            key_data: ca_pem,
+            certificate_data: ca_der.clone(),
+            certificate_format: KeyFormat::Der as i32,
+            ..Default::default()
+        })
+        .await
+        .expect("import ca")
+        .into_inner();
+    let ca_id = ca.metadata.expect("metadata").key_id;
+
+    let ca_cert_key = key_client
+        .import_key(ImportKeyRequest {
+            kind: KeyKind::Certificate as i32,
+            lifetime: KeyLifetime::Permanent as i32,
+            format: KeyFormat::Der as i32,
+            certificate_data: ca_der,
+            certificate_format: KeyFormat::Der as i32,
+            ..Default::default()
+        })
+        .await
+        .expect("import ca cert")
+        .into_inner()
+        .metadata
+        .expect("metadata")
+        .key_id;
+
+    let certrep = scep_client
+        .build_success_cert_rep(BuildScepSuccessCertRepRequest {
+            ca_key_id: ca_id,
+            transaction_id: "verify-tx".into(),
+            recipient_nonce: vec![1, 2, 3, 4],
+            issued_cert_der: issued_der,
+            wrapper_cert_der: wrapper_der,
+            ..Default::default()
+        })
+        .await
+        .expect("build certrep")
+        .into_inner()
+        .certrep_der;
+
+    let verified = cms_client
+        .verify(VerifyCmsRequest {
+            cms_der: certrep,
+            verify_key_id: ca_cert_key,
+            ..Default::default()
+        })
+        .await
+        .expect("verify certrep")
+        .into_inner()
+        .valid;
+    assert!(verified);
 }

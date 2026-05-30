@@ -27,14 +27,51 @@ use crate::cryptooffload::v1::cms_service_server::CmsServiceServer;
 use crate::cryptooffload::v1::key_service_server::KeyServiceServer;
 use crate::cryptooffload::v1::scep_service_server::ScepServiceServer;
 use crate::cryptooffload::v1::sign_service_server::SignServiceServer;
-use crate::key_store::KeyStore;
+
+/// 服务端启动配置。
+#[derive(Debug, Clone)]
+pub struct ServerConfig {
+    pub listen: SocketAddr,
+    /// 同时进行 OpenSSL 运算的最大 in-flight 任务数；0 表示按可见 CPU 核数。
+    pub crypto_max_inflight: usize,
+}
+
+impl ServerConfig {
+    pub fn new(listen: SocketAddr) -> Self {
+        Self {
+            listen,
+            crypto_max_inflight: default_crypto_max_inflight(),
+        }
+    }
+}
+
+/// 默认 crypto 并发上限 = 可见逻辑 CPU 核数（与 cpuset 一致）。
+pub fn default_crypto_max_inflight() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .max(1)
+}
 
 pub async fn run_server(listen: SocketAddr) -> anyhow::Result<()> {
+    run_server_with_config(ServerConfig::new(listen)).await
+}
+
+pub async fn run_server_with_config(config: ServerConfig) -> anyhow::Result<()> {
     openssl_init::init();
 
-    let state = Arc::new(AppState {
-        keys: KeyStore::new(),
-    });
+    let crypto_max_inflight = if config.crypto_max_inflight > 0 {
+        config.crypto_max_inflight
+    } else {
+        default_crypto_max_inflight()
+    };
+    tracing::info!(
+        listen = %config.listen,
+        crypto_max_inflight,
+        "crypto-offload-server starting"
+    );
+
+    let state = Arc::new(AppState::new(crypto_max_inflight));
 
     let key_svc = KeyServiceImpl::new(state.clone());
     let sign_svc = SignServiceImpl::new(state.clone());
@@ -46,7 +83,7 @@ pub async fn run_server(listen: SocketAddr) -> anyhow::Result<()> {
         .add_service(SignServiceServer::new(sign_svc))
         .add_service(CmsServiceServer::new(cms_svc))
         .add_service(ScepServiceServer::new(scep_svc))
-        .serve(listen)
+        .serve(config.listen)
         .await?;
 
     Ok(())

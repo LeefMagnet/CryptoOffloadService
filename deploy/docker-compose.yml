@@ -8,6 +8,10 @@ services:
     command:
       - --listen
       - "0.0.0.0:50051"
+      - --crypto-max-inflight
+      - "4"
+      - --crypto-blocking-threads
+      - "8"
     deploy:
       resources:
         limits:

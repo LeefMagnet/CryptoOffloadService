@@ -45,6 +45,7 @@
 |------|------|
 | [docs/API.md](docs/API.md) | **Protobuf API 完整参考**（字段、枚举、错误码） |
 | [docs/BENCHMARK_AND_TUNING.md](docs/BENCHMARK_AND_TUNING.md) | **压测与容器资源配置指南** |
+| [docs/STABILITY.md](docs/STABILITY.md) | **服务端稳定性加固与可选优化** |
 
 ## 各语言 Demo
 

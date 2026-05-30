@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use tokio::sync::Semaphore;
 use tonic::{Request, Response, Status};
 
 use crate::crypto_cms;
@@ -16,6 +17,17 @@ const MAX_SMALL_PACKET: usize = 1024 * 1024;
 
 pub struct AppState {
     pub keys: KeyStore,
+    crypto_semaphore: Arc<Semaphore>,
+}
+
+impl AppState {
+    pub fn new(crypto_max_inflight: usize) -> Self {
+        let n = crypto_max_inflight.max(1);
+        Self {
+            keys: KeyStore::new(),
+            crypto_semaphore: Arc::new(Semaphore::new(n)),
+        }
+    }
 }
 
 pub struct KeyServiceImpl {
@@ -58,6 +70,27 @@ impl ScepServiceImpl {
     }
 }
 
+async fn run_crypto<T, F>(state: &Arc<AppState>, f: F) -> Result<T, Status>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, anyhow::Error> + Send + 'static,
+{
+    let permit = state
+        .crypto_semaphore
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| Status::unavailable("crypto concurrency semaphore closed"))?;
+
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        f()
+    })
+    .await
+    .map_err(|e| Status::internal(format!("crypto task join error: {e}")))?
+    .map_err(map_crypto_err)
+}
+
 #[tonic::async_trait]
 impl KeyService for KeyServiceImpl {
     async fn import_key(
@@ -80,7 +113,7 @@ impl KeyService for KeyServiceImpl {
                 &req.certificate_data,
                 req.certificate_format,
             )
-            .map_err(map_err)?;
+            .map_err(map_key_store_err)?;
         Ok(Response::new(ImportKeyResponse {
             metadata: Some(metadata),
         }))
@@ -95,7 +128,7 @@ impl KeyService for KeyServiceImpl {
             .state
             .keys
             .delete_key(&req.key_id)
-            .map_err(map_err)?;
+            .map_err(map_key_store_err)?;
         Ok(Response::new(DeleteKeyResponse { deleted }))
     }
 
@@ -104,7 +137,11 @@ impl KeyService for KeyServiceImpl {
         request: Request<GetKeyInfoRequest>,
     ) -> Result<Response<GetKeyInfoResponse>, Status> {
         let req = request.into_inner();
-        let metadata = self.state.keys.get_metadata(&req.key_id).map_err(map_err)?;
+        let metadata = self
+            .state
+            .keys
+            .get_metadata(&req.key_id)
+            .map_err(map_key_store_err)?;
         Ok(Response::new(GetKeyInfoResponse {
             metadata: Some(metadata),
         }))
@@ -114,9 +151,12 @@ impl KeyService for KeyServiceImpl {
         &self,
         _request: Request<ListKeysRequest>,
     ) -> Result<Response<ListKeysResponse>, Status> {
-        Ok(Response::new(ListKeysResponse {
-            keys: self.state.keys.list_metadata(),
-        }))
+        let keys = self
+            .state
+            .keys
+            .list_metadata()
+            .map_err(map_key_store_err)?;
+        Ok(Response::new(ListKeysResponse { keys }))
     }
 }
 
@@ -130,16 +170,19 @@ impl SignService for SignServiceImpl {
         if req.data.len() > MAX_SMALL_PACKET {
             return Err(Status::invalid_argument("data too large"));
         }
-        let access = self.state.keys.access_key(&req.key_id).map_err(map_err)?;
+        let access = self
+            .state
+            .keys
+            .access_key(&req.key_id)
+            .map_err(map_key_store_err)?;
         let data = req.data;
         let hash_algorithm = req.hash_algorithm;
         let sign_algorithm = req.sign_algorithm;
-        let output = tokio::task::spawn_blocking(move || {
+        let state = self.state.clone();
+        let output = run_crypto(&state, move || {
             crypto_sign::sign(access, &data, hash_algorithm, sign_algorithm)
         })
-        .await
-        .map_err(|e| Status::internal(e.to_string()))?
-        .map_err(map_err)?;
+        .await?;
 
         Ok(Response::new(SignResponse {
             signature: output.signature,
@@ -156,12 +199,17 @@ impl SignService for SignServiceImpl {
         if req.data.len() > MAX_SMALL_PACKET || req.signature.len() > MAX_SMALL_PACKET {
             return Err(Status::invalid_argument("data or signature too large"));
         }
-        let access = self.state.keys.access_key(&req.key_id).map_err(map_err)?;
+        let access = self
+            .state
+            .keys
+            .access_key(&req.key_id)
+            .map_err(map_key_store_err)?;
         let data = req.data;
         let signature = req.signature;
         let hash_algorithm = req.hash_algorithm;
         let sign_algorithm = req.sign_algorithm;
-        let valid = tokio::task::spawn_blocking(move || {
+        let state = self.state.clone();
+        let valid = run_crypto(&state, move || {
             crypto_sign::verify(
                 access,
                 &data,
@@ -170,9 +218,7 @@ impl SignService for SignServiceImpl {
                 sign_algorithm,
             )
         })
-        .await
-        .map_err(|e| Status::internal(e.to_string()))?
-        .map_err(map_err)?;
+        .await?;
 
         Ok(Response::new(VerifyResponse { valid }))
     }
@@ -195,14 +241,12 @@ impl CmsService for CmsServiceImpl {
                 self.state
                     .keys
                     .access_key(&req.decrypt_key_id)
-                    .map_err(map_err)?,
+                    .map_err(map_key_store_err)?,
             )
         };
         let cms_der = req.cms_der;
-        let parsed = tokio::task::spawn_blocking(move || crypto_cms::parse_cms(&cms_der, access))
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?
-            .map_err(map_err)?;
+        let state = self.state.clone();
+        let parsed = run_crypto(&state, move || crypto_cms::parse_cms(&cms_der, access)).await?;
 
         Ok(Response::new(ParseCmsResponse {
             content: parsed.0,
@@ -227,16 +271,14 @@ impl CmsService for CmsServiceImpl {
             .state
             .keys
             .access_key(&req.sign_key_id)
-            .map_err(map_err)?;
+            .map_err(map_key_store_err)?;
         let content = req.content;
         let extra = req.extra_certificates;
         let detached = req.detached;
-        let cms_der = tokio::task::spawn_blocking(move || {
-            crypto_cms::build_cms(&content, access, detached, &extra)
-        })
-        .await
-        .map_err(|e| Status::internal(e.to_string()))?
-        .map_err(map_err)?;
+        let state = self.state.clone();
+        let cms_der =
+            run_crypto(&state, move || crypto_cms::build_cms(&content, access, detached, &extra))
+                .await?;
 
         Ok(Response::new(BuildCmsResponse { cms_der }))
     }
@@ -253,15 +295,12 @@ impl CmsService for CmsServiceImpl {
             .state
             .keys
             .access_key(&req.verify_key_id)
-            .map_err(map_err)?;
+            .map_err(map_key_store_err)?;
         let cms_der = req.cms_der;
         let content = req.content;
-        let valid = tokio::task::spawn_blocking(move || {
-            crypto_cms::verify_cms(&cms_der, access, &content)
-        })
-        .await
-        .map_err(|e| Status::internal(e.to_string()))?
-        .map_err(map_err)?;
+        let state = self.state.clone();
+        let valid =
+            run_crypto(&state, move || crypto_cms::verify_cms(&cms_der, access, &content)).await?;
 
         Ok(Response::new(VerifyCmsResponse { valid }))
     }
@@ -281,14 +320,11 @@ impl ScepService for ScepServiceImpl {
             .state
             .keys
             .access_key(&req.ca_key_id)
-            .map_err(map_err)?;
+            .map_err(map_key_store_err)?;
         let scep_der = req.scep_der;
-        let parsed = tokio::task::spawn_blocking(move || {
-            crypto_scep::parse_request(&scep_der, access)
-        })
-        .await
-        .map_err(|e| Status::internal(e.to_string()))?
-        .map_err(map_err)?;
+        let state = self.state.clone();
+        let parsed =
+            run_crypto(&state, move || crypto_scep::parse_request(&scep_der, access)).await?;
 
         Ok(Response::new(ParseScepRequestResponse {
             csr_der: parsed.0,
@@ -321,13 +357,14 @@ impl ScepService for ScepServiceImpl {
             .state
             .keys
             .access_key(&req.ca_key_id)
-            .map_err(map_err)?;
+            .map_err(map_key_store_err)?;
         let transaction_id = req.transaction_id;
         let recipient_nonce = req.recipient_nonce;
         let sender_nonce = req.sender_nonce;
         let issued_cert_der = req.issued_cert_der;
         let wrapper_cert_der = req.wrapper_cert_der;
-        let certrep_der = tokio::task::spawn_blocking(move || {
+        let state = self.state.clone();
+        let certrep_der = run_crypto(&state, move || {
             crypto_scep::build_success_certrep(
                 access,
                 &transaction_id,
@@ -337,9 +374,7 @@ impl ScepService for ScepServiceImpl {
                 &wrapper_cert_der,
             )
         })
-        .await
-        .map_err(|e| Status::internal(e.to_string()))?
-        .map_err(map_err)?;
+        .await?;
 
         Ok(Response::new(BuildScepCertRepResponse { certrep_der }))
     }
@@ -370,13 +405,14 @@ impl ScepService for ScepServiceImpl {
             .state
             .keys
             .access_key(&req.ca_key_id)
-            .map_err(map_err)?;
+            .map_err(map_key_store_err)?;
         let transaction_id = req.transaction_id;
         let recipient_nonce = req.recipient_nonce;
         let sender_nonce = req.sender_nonce;
         let fail_info = req.fail_info as u8;
         let fail_info_text = req.fail_info_text;
-        let certrep_der = tokio::task::spawn_blocking(move || {
+        let state = self.state.clone();
+        let certrep_der = run_crypto(&state, move || {
             crypto_scep::build_failure_certrep(
                 access,
                 &transaction_id,
@@ -386,14 +422,21 @@ impl ScepService for ScepServiceImpl {
                 &fail_info_text,
             )
         })
-        .await
-        .map_err(|e| Status::internal(e.to_string()))?
-        .map_err(map_err)?;
+        .await?;
 
         Ok(Response::new(BuildScepCertRepResponse { certrep_der }))
     }
 }
 
-fn map_err(err: anyhow::Error) -> Status {
+fn map_key_store_err(err: anyhow::Error) -> Status {
+    let msg = err.to_string();
+    if msg.contains("lock poisoned") {
+        Status::unavailable(msg)
+    } else {
+        Status::invalid_argument(msg)
+    }
+}
+
+fn map_crypto_err(err: anyhow::Error) -> Status {
     Status::invalid_argument(err.to_string())
 }

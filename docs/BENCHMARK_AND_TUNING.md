@@ -189,7 +189,8 @@ SERVER_PROFILE="docker-cpuset-4-7,cpus-limit=4" CLIENTS=4 bash deploy/smoke_test
 |------|------|------|------|
 | `cpuset` / `cpus` | Docker | = Rust 核数 | 与业务进程错开 |
 | `--worker-threads` | 服务端 | = Rust 核数 | Tokio worker |
-| `--crypto-blocking-threads` | 服务端 | = Rust 核数 | OpenSSL 阻塞任务 |
+| `--crypto-blocking-threads` | 服务端 | ≈ Rust 核数 ~ 2×核数 | `spawn_blocking` 池上限 |
+| `--crypto-max-inflight` | 服务端 | = Rust 核数（默认自动） | OpenSSL 并发 Semaphore，见 [STABILITY.md](./STABILITY.md) |
 | `MaxOpen` | 客户端连接池 | = 核数 ~ 2×核数 | 见 SDK pool 配置 |
 | `MinIdle` | 客户端连接池 | 2 ~ 4 | 减少冷启动延迟 |
 | `--server-profile` | 压测客户端 | 必填（运维） | 记录上述配置，写入报告 |

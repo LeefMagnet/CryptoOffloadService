@@ -3,7 +3,7 @@ use openssl::hash::MessageDigest;
 use openssl::pkey::{Id, PKey, Private, Public};
 use openssl::x509::X509;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, PoisonError, RwLock};
 use uuid::Uuid;
 
 use crate::pb::{
@@ -128,7 +128,11 @@ impl KeyStore {
             used: false,
         };
 
-        let mut guard = self.inner.write().expect("key store lock poisoned");
+        let mut guard = self
+            .inner
+            .write()
+            .map_err(lock_poisoned)
+            .context("import key")?;
         guard.insert(
             key_id.clone(),
             StoredKey {
@@ -140,26 +144,42 @@ impl KeyStore {
     }
 
     pub fn delete_key(&self, key_id: &str) -> Result<bool> {
-        let mut guard = self.inner.write().expect("key store lock poisoned");
+        let mut guard = self
+            .inner
+            .write()
+            .map_err(lock_poisoned)
+            .context("delete key")?;
         Ok(guard.remove(key_id).is_some())
     }
 
     pub fn get_metadata(&self, key_id: &str) -> Result<KeyMetadata> {
-        let guard = self.inner.read().expect("key store lock poisoned");
+        let guard = self
+            .inner
+            .read()
+            .map_err(lock_poisoned)
+            .context("get key metadata")?;
         guard
             .get(key_id)
             .map(|entry| entry.metadata.clone())
             .ok_or_else(|| anyhow!("key not found: {key_id}"))
     }
 
-    pub fn list_metadata(&self) -> Vec<KeyMetadata> {
-        let guard = self.inner.read().expect("key store lock poisoned");
-        guard.values().map(|entry| entry.metadata.clone()).collect()
+    pub fn list_metadata(&self) -> Result<Vec<KeyMetadata>> {
+        let guard = self
+            .inner
+            .read()
+            .map_err(lock_poisoned)
+            .context("list keys")?;
+        Ok(guard.values().map(|entry| entry.metadata.clone()).collect())
     }
 
     /// 获取密钥用于密码运算。临时密钥在成功返回后从存储中移除（单次有效）。
     pub fn access_key(&self, key_id: &str) -> Result<KeyAccess> {
-        let mut guard = self.inner.write().expect("key store lock poisoned");
+        let mut guard = self
+            .inner
+            .write()
+            .map_err(lock_poisoned)
+            .context("access key")?;
         let entry = guard
             .get_mut(key_id)
             .ok_or_else(|| anyhow!("key not found: {key_id}"))?;
@@ -180,6 +200,10 @@ impl KeyStore {
             Ok(KeyAccess::Permanent(material))
         }
     }
+}
+
+fn lock_poisoned<T>(err: PoisonError<T>) -> anyhow::Error {
+    anyhow!("key store lock poisoned: {err}")
 }
 
 fn parse_private_key(data: &[u8], format: i32) -> Result<PKey<Private>> {

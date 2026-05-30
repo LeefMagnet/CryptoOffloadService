@@ -19,6 +19,7 @@
 | SCEP RA 路径复杂（PKIO 解析、3DES Envelop、CertRep） | 各语言重复实现 PKCS#7 | **ScepService** 统一 offload |
 | 多语言产品线密码接口不一致 | 各写一套 | **Protobuf 契约** + 四语言 SDK |
 | 密码运算与业务抢 CPU | 同进程争用 | **cpuset / Docker cpus** 隔离 Sidecar |
+| JNI/内嵌库无法单独绑核 | OpenSSL 与 GC、HTTP 等同进程调度 | Sidecar **独占 CPU 核**，单核算力利用率大幅提升 |
 | 密钥在热路径反复解析 PEM | 每次请求 decode ASN.1 | **ImportKey 一次解析**，内存缓存 `PKey` |
 
 **适用场景**：IoT 证书签发（SCEP）、网关/CMS 签名、需要集中管控算法与 OpenSSL 版本的 PKCS#7 处理、国密 SM2 与 SCEP 组合 offload。
@@ -105,22 +106,7 @@ flowchart LR
 
 ---
 
-## 5. 与 ScepAccelerator 的关系
-
-| 维度 | ScepAccelerator | CryptoOffloadService |
-|------|-----------------|----------------------|
-| 定位 | SCEP 专用加速（UDS 二进制） | **通用**密码 offload + SCEP |
-| 协议 | 自定义 opcode 帧 | **gRPC / Protobuf** |
-| 语言 | 主要 Go 客户端 | **Go / Java / Python / Rust** |
-| 密钥 | 启动读 CA DER 文件 | **ImportKey → key_id** |
-| SCEP | parse / build success / failure | **ScepService** 三 RPC |
-| 经验复用 | 引擎池、cpuset、legacy OID | Semaphore、spawn_blocking、SCEP 实现同源 |
-
-**迁移路径**：SCEP 业务从 ScepAccelerator UDS 迁到 CryptoOffload 时，替换 SDK 调用为 `ParseRequest` / `Build*CertRep`，RA 逻辑不变。
-
----
-
-## 6. 部署与资源模型
+## 5. 部署与资源模型
 
 ```mermaid
 flowchart LR
@@ -134,7 +120,7 @@ flowchart LR
 |----|------|
 | Sidecar CPU | 与业务 **cpuset 错开**；RSA/SCEP 密集场景约 2–4 核 |
 | `--crypto-max-inflight` | = 可见核数 |
-| SDK `MaxOpen` | **≈ 2 × server 核数**（见 §7） |
+| SDK `MaxOpen` | **≈ 2 × server 核数**（见 §6.3） |
 | 内存 | 密钥在进程内存；按导入密钥数量估算 |
 | 启动参数 | `--worker-threads` / `--crypto-blocking-threads` 与核数对齐 |
 
@@ -142,22 +128,26 @@ Docker Compose 示例见 [BENCHMARK_AND_TUNING.md §4](./BENCHMARK_AND_TUNING.md
 
 ---
 
-## 7. 性能潜力（实测摘要）
+## 6. 性能潜力（实测摘要）
 
 **环境**：AMD Ryzen 7 5800X3D · WSL · RSA-2048 Sign · payload 256B  
 **说明**：以下为 **已有 key_id 后的运算 QPS**，ImportKey 不计入。
 
-### 7.1 核数与 Sign QPS（线性缩放）
+### 6.1 绑核 vs 进程内 JNI（QPS/核）
 
-| Server 核数 | clients（推荐） | Sign QPS | 约 QPS/核 |
-|-------------|---------------|----------|-----------|
-| 16（未绑核） | 4 | ~4326 | ~270 |
-| 3（cpuset 0–2） | 6 | ~3749 | ~1250 |
-| 2（cpuset 0–1） | 4 | ~2534 | ~1267 |
+**核心差异**：Java/Go 通过 JNI 或 BouncyCastle 在**业务进程内**做签名时，OpenSSL 与 GC、HTTP 线程、其它业务逻辑共享同一调度域，**无法**把密码运算单独绑到指定 CPU 核；运算线程在全机可见核上漂移，上下文切换与缓存失效多，**单核算力利用率低**。
 
-RSA 签名与 **独占核数近似成正比**；加核即可线性换吞吐。
+CryptoOffload 作为**独立 Sidecar**，可用 `taskset` / Docker `cpuset` 为密码服务独占若干核，与业务进程 **cpuset 错开**，RSA 签名线程稳定跑在专用核上。
 
-### 7.2 三核 Sidecar 各模式峰值（clients=4/6）
+| 部署方式 | 绑核 | clients | Sign QPS | **QPS/核** | 说明 |
+|----------|------|---------|----------|------------|------|
+| 业务进程内 JNI（参考） | 不可单独绑核 | 4 | ~4326 | **~270** | 16 逻辑核混跑，总 QPS 尚可但单核效率低 |
+| **Sidecar** cpuset 2 核 | 0–1 独占 | 4 | ~2534 | **~1267** | 仅 2 核即达混跑总吞吐的 ~59% |
+| **Sidecar** cpuset 3 核 | 0–2 独占 | 6 | ~3749 | **~1250** | 3 核总吞吐接近 16 核混跑 |
+
+**绑核后 QPS/核提升约 4.6×**（~270 → ~1250）。Sidecar 独占核场景下，加核近乎线性扩展（2 核 → 3 核，总 QPS +48%），可按需为密码运算分配 2–4 核而不影响业务 cpuset。
+
+### 6.2 三核 Sidecar 各模式峰值（clients=4/6）
 
 | 能力 | QPS | 特点 |
 |------|-----|------|
@@ -170,7 +160,7 @@ RSA 签名与 **独占核数近似成正比**；加核即可线性换吞吐。
 
 完整表格与复现命令见 [BENCHMARK_AND_TUNING.md §3](./BENCHMARK_AND_TUNING.md#3-参考性能必须标注环境)。
 
-### 7.3 Client 连接池怎么配
+### 6.3 Client 连接池怎么配
 
 网格压测结论（Sign 模式）：
 
@@ -184,7 +174,7 @@ RSA 签名与 **独占核数近似成正比**；加核即可线性换吞吐。
 
 ---
 
-## 8. 稳定性与运维要点
+## 7. 稳定性与运维要点
 
 | 机制 | 说明 |
 |------|------|
@@ -198,7 +188,7 @@ RSA 签名与 **独占核数近似成正比**；加核即可线性换吞吐。
 
 ---
 
-## 9. 多语言接入
+## 8. 多语言接入
 
 | 语言 | SDK | Demo |
 |------|-----|------|
@@ -217,7 +207,7 @@ Java 21 可用**虚拟线程** + blocking SDK，等待 offload 时不占满平�
 
 ---
 
-## 10. 能力边界（宣讲时建议主动说明）
+## 9. 能力边界（宣讲时建议主动说明）
 
 | 项 | 边界 |
 |----|------|
@@ -230,7 +220,7 @@ Java 21 可用**虚拟线程** + blocking SDK，等待 offload 时不占满平�
 
 ---
 
-## 11. 文档地图
+## 10. 文档地图
 
 | 文档 | 读者 | 内容 |
 |------|------|------|
@@ -242,7 +232,7 @@ Java 21 可用**虚拟线程** + blocking SDK，等待 offload 时不占满平�
 
 ---
 
-## 12. 版本与仓库
+## 11. 版本与仓库
 
 - **Proto 包**：`cryptooffload.v1`
 - **默认端口**：`50051`

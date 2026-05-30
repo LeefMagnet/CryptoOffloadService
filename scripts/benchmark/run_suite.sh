@@ -1,11 +1,5 @@
 #!/usr/bin/env bash
-# 全模式压测套件：输出 CPU/ cpuset 环境 + Sign/Verify/CMS 全部模式。
-# 用法：
-#   # 终端1：按目标核数启动服务端（示例 4 核）
-#   taskset -c 4-7 ./target/release/crypto-offload-server --listen 127.0.0.1:50051
-#
-#   # 终端2：跑套件（标注 server 配置）
-#   SERVER_PROFILE="rust-cpuset-4-7,unlimited-cpu" CLIENTS=4 bash scripts/benchmark/run_suite.sh
+# 全模式压测套件：Sign/Verify/CMS/SCEP/国密 全部 mode。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -27,6 +21,22 @@ if [[ ! -x "$BIN" ]]; then
   cargo build --release -p crypto-offload-server --bin crypto-offload-benchmark
 fi
 
+run_mode() {
+  local mode="$1"
+  echo "######## mode=${mode} ########"
+  if ! "$BIN" \
+    --address "http://${ADDR}" \
+    --mode "${mode}" \
+    --clients "${CLIENTS}" \
+    --total-requests "${TOTAL}" \
+    --warmup-seconds "${WARMUP}" \
+    --payload-size "${PAYLOAD}" \
+    --server-profile "${SERVER_PROFILE}"; then
+    echo "WARN: mode=${mode} failed (may be unsupported on this OpenSSL build)"
+  fi
+  echo
+}
+
 {
   echo "=== CryptoOffload benchmark suite ==="
   echo "date: $(date -Iseconds)"
@@ -46,18 +56,17 @@ fi
   fi
   echo
 
-  MODES=(sign verify sign-verify cms-build cms-parse cms-verify cms-build-parse import-key)
+  MODES=(
+    sign verify sign-verify
+    sign-rsa-pss sign-verify-rsa-pss
+    sign-sm2 sign-verify-sm2
+    sign-ed25519 sign-verify-ed25519
+    cms-build cms-parse cms-verify cms-build-parse
+    scep-certrep-success scep-certrep-failure
+    import-key
+  )
   for mode in "${MODES[@]}"; do
-    echo "######## mode=${mode} ########"
-    "$BIN" \
-      --address "http://${ADDR}" \
-      --mode "${mode}" \
-      --clients "${CLIENTS}" \
-      --total-requests "${TOTAL}" \
-      --warmup-seconds "${WARMUP}" \
-      --payload-size "${PAYLOAD}" \
-      --server-profile "${SERVER_PROFILE}"
-    echo
+    run_mode "${mode}"
   done
 } 2>&1 | tee "${OUT}"
 

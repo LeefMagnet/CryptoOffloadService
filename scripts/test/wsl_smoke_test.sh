@@ -56,10 +56,17 @@ run() {
 run sign 100
 run verify 100
 run sign-verify 50
+run sign-rsa-pss 100
+run sign-ed25519 100
+run sign-verify-ed25519 50
+run sign-sm2 100
+run sign-verify-sm2 50
 run cms-build 100
 run cms-parse 100
 run cms-verify 100
 run cms-build-parse 50
+run scep-certrep-success 100
+run scep-certrep-failure 100
 
 echo ""
 echo "==> ALL WSL SMOKE TESTS PASSED"

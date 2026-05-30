@@ -3,10 +3,12 @@ use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
 use crate::crypto_cms;
+use crate::crypto_scep;
 use crate::crypto_sign;
 use crate::key_store::KeyStore;
 use crate::pb::cms_service_server::CmsService;
 use crate::pb::key_service_server::KeyService;
+use crate::pb::scep_service_server::ScepService;
 use crate::pb::sign_service_server::SignService;
 use crate::pb::*;
 
@@ -28,6 +30,10 @@ pub struct CmsServiceImpl {
     state: Arc<AppState>,
 }
 
+pub struct ScepServiceImpl {
+    state: Arc<AppState>,
+}
+
 impl KeyServiceImpl {
     pub fn new(state: Arc<AppState>) -> Self {
         Self { state }
@@ -41,6 +47,12 @@ impl SignServiceImpl {
 }
 
 impl CmsServiceImpl {
+    pub fn new(state: Arc<AppState>) -> Self {
+        Self { state }
+    }
+}
+
+impl ScepServiceImpl {
     pub fn new(state: Arc<AppState>) -> Self {
         Self { state }
     }
@@ -252,6 +264,133 @@ impl CmsService for CmsServiceImpl {
         .map_err(map_err)?;
 
         Ok(Response::new(VerifyCmsResponse { valid }))
+    }
+}
+
+#[tonic::async_trait]
+impl ScepService for ScepServiceImpl {
+    async fn parse_request(
+        &self,
+        request: Request<ParseScepRequestRequest>,
+    ) -> Result<Response<ParseScepRequestResponse>, Status> {
+        let req = request.into_inner();
+        if req.scep_der.len() > MAX_SMALL_PACKET {
+            return Err(Status::invalid_argument("scep_der too large"));
+        }
+        let access = self
+            .state
+            .keys
+            .access_key(&req.ca_key_id)
+            .map_err(map_err)?;
+        let scep_der = req.scep_der;
+        let parsed = tokio::task::spawn_blocking(move || {
+            crypto_scep::parse_request(&scep_der, access)
+        })
+        .await
+        .map_err(|e| Status::internal(e.to_string()))?
+        .map_err(map_err)?;
+
+        Ok(Response::new(ParseScepRequestResponse {
+            csr_der: parsed.0,
+            wrapper_cert_der: parsed.1,
+        }))
+    }
+
+    async fn build_success_cert_rep(
+        &self,
+        request: Request<BuildScepSuccessCertRepRequest>,
+    ) -> Result<Response<BuildScepCertRepResponse>, Status> {
+        let req = request.into_inner();
+        for blob in [
+            &req.recipient_nonce,
+            &req.sender_nonce,
+            &req.issued_cert_der,
+            &req.wrapper_cert_der,
+        ] {
+            if blob.len() > MAX_SMALL_PACKET {
+                return Err(Status::invalid_argument("SCEP request field too large"));
+            }
+        }
+        if req.transaction_id.is_empty() {
+            return Err(Status::invalid_argument("transaction_id is required"));
+        }
+        if req.recipient_nonce.is_empty() {
+            return Err(Status::invalid_argument("recipient_nonce is required"));
+        }
+        let access = self
+            .state
+            .keys
+            .access_key(&req.ca_key_id)
+            .map_err(map_err)?;
+        let transaction_id = req.transaction_id;
+        let recipient_nonce = req.recipient_nonce;
+        let sender_nonce = req.sender_nonce;
+        let issued_cert_der = req.issued_cert_der;
+        let wrapper_cert_der = req.wrapper_cert_der;
+        let certrep_der = tokio::task::spawn_blocking(move || {
+            crypto_scep::build_success_certrep(
+                access,
+                &transaction_id,
+                &recipient_nonce,
+                &sender_nonce,
+                &issued_cert_der,
+                &wrapper_cert_der,
+            )
+        })
+        .await
+        .map_err(|e| Status::internal(e.to_string()))?
+        .map_err(map_err)?;
+
+        Ok(Response::new(BuildScepCertRepResponse { certrep_der }))
+    }
+
+    async fn build_failure_cert_rep(
+        &self,
+        request: Request<BuildScepFailureCertRepRequest>,
+    ) -> Result<Response<BuildScepCertRepResponse>, Status> {
+        let req = request.into_inner();
+        for blob in [&req.recipient_nonce, &req.sender_nonce] {
+            if blob.len() > MAX_SMALL_PACKET {
+                return Err(Status::invalid_argument("SCEP request field too large"));
+            }
+        }
+        if req.transaction_id.is_empty() {
+            return Err(Status::invalid_argument("transaction_id is required"));
+        }
+        if req.recipient_nonce.is_empty() {
+            return Err(Status::invalid_argument("recipient_nonce is required"));
+        }
+        if req.fail_info_text.is_empty() {
+            return Err(Status::invalid_argument("fail_info_text is required"));
+        }
+        if req.fail_info > 4 {
+            return Err(Status::invalid_argument("fail_info must be 0..=4"));
+        }
+        let access = self
+            .state
+            .keys
+            .access_key(&req.ca_key_id)
+            .map_err(map_err)?;
+        let transaction_id = req.transaction_id;
+        let recipient_nonce = req.recipient_nonce;
+        let sender_nonce = req.sender_nonce;
+        let fail_info = req.fail_info as u8;
+        let fail_info_text = req.fail_info_text;
+        let certrep_der = tokio::task::spawn_blocking(move || {
+            crypto_scep::build_failure_certrep(
+                access,
+                &transaction_id,
+                &recipient_nonce,
+                &sender_nonce,
+                fail_info,
+                &fail_info_text,
+            )
+        })
+        .await
+        .map_err(|e| Status::internal(e.to_string()))?
+        .map_err(map_err)?;
+
+        Ok(Response::new(BuildScepCertRepResponse { certrep_der }))
     }
 }
 

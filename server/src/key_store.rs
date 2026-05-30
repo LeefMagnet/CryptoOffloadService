@@ -227,6 +227,7 @@ fn describe_key(material: &KeyMaterial) -> (String, i32) {
     let algorithm = match id {
         Id::RSA => "RSA".to_string(),
         Id::EC => "EC".to_string(),
+        Id::SM2 => "SM2".to_string(),
         Id::ED25519 => "Ed25519".to_string(),
         other => format!("{other:?}"),
     };
@@ -239,24 +240,70 @@ pub fn hash_algorithm_to_md(hash: i32) -> Result<MessageDigest> {
         HashAlgorithm::HashSha384 => Ok(MessageDigest::sha384()),
         HashAlgorithm::HashSha512 => Ok(MessageDigest::sha512()),
         HashAlgorithm::HashSha1 => Ok(MessageDigest::sha1()),
+        HashAlgorithm::HashSm3 => Ok(MessageDigest::sm3()),
         HashAlgorithm::Unspecified => bail!("hash algorithm is required"),
     }
 }
 
-pub fn infer_sign_algorithm(material: &KeyMaterial, requested: i32) -> Result<SignAlgorithm> {
-    if requested != SignAlgorithm::Unspecified as i32 {
-        return SignAlgorithm::try_from(requested)
-            .map_err(|_| anyhow!("invalid sign algorithm"));
+/// SM2 签名须使用 SM3；Ed25519 不使用外部摘要；其余算法须指定 hash。
+pub fn resolve_hash_algorithm(
+    material: &KeyMaterial,
+    hash: i32,
+    sign_alg: SignAlgorithm,
+) -> Result<i32> {
+    if sign_alg == SignAlgorithm::SignEd25519 {
+        let h = HashAlgorithm::try_from(hash).unwrap_or(HashAlgorithm::Unspecified);
+        if h != HashAlgorithm::Unspecified {
+            bail!("Ed25519 does not use hash_algorithm; leave it unspecified");
+        }
+        return Ok(HashAlgorithm::Unspecified as i32);
     }
+    if sign_alg == SignAlgorithm::SignSm2 {
+        let h = HashAlgorithm::try_from(hash).unwrap_or(HashAlgorithm::Unspecified);
+        return match h {
+            HashAlgorithm::Unspecified | HashAlgorithm::HashSm3 => Ok(HashAlgorithm::HashSm3 as i32),
+            _ => bail!("SM2 requires SM3 hash algorithm"),
+        };
+    }
+    if hash == HashAlgorithm::Unspecified as i32 {
+        bail!("hash algorithm is required");
+    }
+    let _ = material;
+    Ok(hash)
+}
+
+pub fn infer_sign_algorithm(material: &KeyMaterial, requested: i32) -> Result<SignAlgorithm> {
     let id = match material {
         KeyMaterial::Private { key, .. } => key.id(),
         KeyMaterial::Public { key, .. } => key.id(),
     };
+    if requested != SignAlgorithm::Unspecified as i32 {
+        let req = SignAlgorithm::try_from(requested).map_err(|_| anyhow!("invalid sign algorithm"))?;
+        validate_sign_algorithm_for_key(id, req)?;
+        return Ok(req);
+    }
     Ok(match id {
         Id::RSA => SignAlgorithm::SignRsaPkcs1V15,
-        Id::EC | Id::ED25519 => SignAlgorithm::SignEcdsa,
+        Id::EC => SignAlgorithm::SignEcdsa,
+        Id::ED25519 => SignAlgorithm::SignEd25519,
+        Id::SM2 => SignAlgorithm::SignSm2,
         other => bail!("unsupported key type for signing: {other:?}"),
     })
+}
+
+fn validate_sign_algorithm_for_key(id: Id, alg: SignAlgorithm) -> Result<()> {
+    use SignAlgorithm::*;
+    match (id, alg) {
+        (Id::RSA, SignRsaPkcs1V15) | (Id::RSA, SignRsaPss) => Ok(()),
+        (Id::EC, SignEcdsa) => Ok(()),
+        (Id::ED25519, SignEd25519) => Ok(()),
+        (Id::SM2, SignSm2) => Ok(()),
+        (Id::RSA, _) => bail!("RSA key requires SIGN_RSA_PKCS1_V15 or SIGN_RSA_PSS"),
+        (Id::EC, _) => bail!("EC key requires SIGN_ECDSA"),
+        (Id::ED25519, _) => bail!("Ed25519 key requires SIGN_ED25519"),
+        (Id::SM2, _) => bail!("SM2 key requires SIGN_SM2"),
+        (other, _) => bail!("unsupported key type for signing: {other:?}"),
+    }
 }
 
 pub fn ensure_private(material: &KeyMaterial) -> Result<&PKey<Private>> {
@@ -280,5 +327,18 @@ pub fn signing_cert(material: &KeyMaterial) -> Result<X509> {
             bail!("CMS build requires certificate imported with private key")
         }
         _ => bail!("CMS build requires a private key with certificate"),
+    }
+}
+
+pub fn ca_private_with_cert(material: &KeyMaterial) -> Result<(PKey<Private>, X509)> {
+    match material {
+        KeyMaterial::Private {
+            key,
+            cert: Some(cert),
+        } => Ok((key.clone(), cert.clone())),
+        KeyMaterial::Private { cert: None, .. } => {
+            bail!("SCEP CA requires certificate imported with private key")
+        }
+        KeyMaterial::Public { .. } => bail!("SCEP CA requires a private key"),
     }
 }

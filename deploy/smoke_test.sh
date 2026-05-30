@@ -44,10 +44,15 @@ run_bench() {
 run_bench sign 200
 run_bench verify 200
 run_bench sign-verify 100
+run_bench sign-rsa-pss 200
+run_bench sign-ed25519 200
+run_bench sign-sm2 200
 run_bench cms-build 200
 run_bench cms-parse 200
 run_bench cms-verify 200
 run_bench cms-build-parse 100
+run_bench scep-certrep-success 200
+run_bench scep-certrep-failure 200
 
 echo ""
 echo "==> ALL SMOKE TESTS PASSED"

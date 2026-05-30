@@ -14,6 +14,8 @@ try:
         common_pb2,
         key_service_pb2,
         key_service_pb2_grpc,
+        scep_service_pb2,
+        scep_service_pb2_grpc,
         sign_service_pb2,
         sign_service_pb2_grpc,
     )
@@ -104,6 +106,27 @@ class Client:
         def run(conn: Conn):
             stub = cms_service_pb2_grpc.CmsServiceStub(conn.channel)
             return stub.Verify(req)
+        return self._call(run)
+
+    def parse_scep_request(self, **kwargs):
+        req = scep_service_pb2.ParseScepRequestRequest(**kwargs)
+        def run(conn: Conn):
+            stub = scep_service_pb2_grpc.ScepServiceStub(conn.channel)
+            return stub.ParseRequest(req)
+        return self._call(run)
+
+    def build_scep_success_cert_rep(self, **kwargs):
+        req = scep_service_pb2.BuildScepSuccessCertRepRequest(**kwargs)
+        def run(conn: Conn):
+            stub = scep_service_pb2_grpc.ScepServiceStub(conn.channel)
+            return stub.BuildSuccessCertRep(req)
+        return self._call(run)
+
+    def build_scep_failure_cert_rep(self, **kwargs):
+        req = scep_service_pb2.BuildScepFailureCertRepRequest(**kwargs)
+        def run(conn: Conn):
+            stub = scep_service_pb2_grpc.ScepServiceStub(conn.channel)
+            return stub.BuildFailureCertRep(req)
         return self._call(run)
 
 

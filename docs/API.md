@@ -16,6 +16,7 @@
 | `KeyService` | 密钥导入/删除/查询（类 KMS，返回 `key_id`） |
 | `SignService` | 数据签名与验签（通过 `key_id` 引用密钥） |
 | `CmsService` | CMS/PKCS#7 解析、封装、验签 |
+| `ScepService` | SCEP PKIO 解析与 CertRep 构建（RFC 8894） |
 
 ### 1.2 典型调用流程
 
@@ -79,6 +80,7 @@
 | 2 | `HASH_SHA384` | SHA-384 |
 | 3 | `HASH_SHA512` | SHA-512 |
 | 4 | `HASH_SHA1` | SHA-1（遗留场景） |
+| 5 | `HASH_SM3` | SM3（国密，SM2 默认摘要） |
 
 > 不提供独立的 Hash RPC；摘要运算是签名流程的内置步骤。
 
@@ -89,9 +91,11 @@
 | 0 | `SIGN_ALGORITHM_UNSPECIFIED` | 由服务端按密钥类型推断 |
 | 1 | `SIGN_RSA_PKCS1_V15` | RSA PKCS#1 v1.5 |
 | 2 | `SIGN_RSA_PSS` | RSA-PSS |
-| 3 | `SIGN_ECDSA` | ECDSA / Ed25519 |
+| 3 | `SIGN_ECDSA` | ECDSA（P-256 等椭圆曲线） |
+| 4 | `SIGN_SM2` | 国密 SM2（摘要须 SM3，默认 SM3） |
+| 5 | `SIGN_ED25519` | Ed25519 纯 EdDSA（**不使用** `hash_algorithm`） |
 
-推断规则：RSA 密钥 → `RSA_PKCS1_V15`；EC/Ed25519 → `ECDSA`。
+推断规则：RSA → `RSA_PKCS1_V15`；EC → `ECDSA`；SM2 → `SM2`（hash 未指定时默认 SM3）；Ed25519 → `ED25519`（`hash_algorithm` 须留空）。
 
 ### 2.6 CmsContentType — CMS 内容类型
 
@@ -109,7 +113,7 @@
 | `kind` | KeyKind | 密钥种类 |
 | `lifetime` | KeyLifetime | 生命周期 |
 | `label` | string | 业务标签（可选） |
-| `algorithm` | string | 如 `RSA`、`EC` |
+| `algorithm` | string | 如 `RSA`、`EC`、`SM2` |
 | `key_bits` | int32 | 密钥长度 |
 | `used` | bool | 是否已用于密码运算 |
 
@@ -289,7 +293,75 @@
 
 ---
 
-## 6. gRPC 错误码
+## 6. ScepService
+
+SCEP offload 与 `CmsService` 同级，面向 RFC 8894 PKIO/CertRep 路径。CA 私钥通过 `ca_key_id` 引用，ImportKey 时需附带 CA 证书。
+
+### 6.1 ParseRequest
+
+解析 SCEP PKIO：外层 SignedData 提取 wrapper 证书 + 内层 EnvelopedData 用 CA 解密得到 CSR。
+
+**请求 `ParseScepRequestRequest`**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `scep_der` | bytes | SCEP PKIO DER |
+| `ca_key_id` | string | CA 私钥 key_id（含 certificate_data） |
+
+**响应 `ParseScepRequestResponse`**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `csr_der` | bytes | 解密得到的 CSR DER |
+| `wrapper_cert_der` | bytes | 外层 SignedData 中的 wrapper 证书 DER |
+
+### 6.2 BuildSuccessCertRep
+
+构建 SUCCESS CertRep（pkiStatus=0，含 3DES EnvelopedData 包裹的签发证书）。
+
+**请求 `BuildScepSuccessCertRepRequest`**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `ca_key_id` | string | 是 | CA 私钥 key_id |
+| `transaction_id` | string | 是 | SCEP transactionID |
+| `recipient_nonce` | bytes | 是 | 请求 senderNonce |
+| `sender_nonce` | bytes | 否 | 响应 senderNonce；空则自动生成 16 字节 |
+| `issued_cert_der` | bytes | 是 | RA 签发的终端证书 DER |
+| `wrapper_cert_der` | bytes | 是 | wrapper 证书 DER（Envelop 接收方） |
+
+**响应 `BuildScepCertRepResponse`**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `certrep_der` | bytes | CertRep PKCS#7 DER |
+
+### 6.3 BuildFailureCertRep
+
+构建 FAILURE CertRep（pkiStatus=2，无 EnvelopedData）。
+
+**请求 `BuildScepFailureCertRepRequest`**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `ca_key_id` | string | 是 | CA 私钥 key_id |
+| `transaction_id` | string | 是 | SCEP transactionID |
+| `recipient_nonce` | bytes | 是 | 请求 senderNonce |
+| `sender_nonce` | bytes | 否 | 空则自动生成 |
+| `fail_info` | uint32 | 是 | 0..=4（RFC 8894 Table 5） |
+| `fail_info_text` | string | 是 | UTF-8 失败说明 |
+
+**响应 `BuildScepCertRepResponse`**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `certrep_der` | bytes | CertRep PKCS#7 DER |
+
+> 服务端启动时会注册 VeriSign SCEP 专有 OID 并加载 OpenSSL legacy provider（3DES 解密）。
+
+---
+
+## 7. gRPC 错误码
 
 业务错误以 `INVALID_ARGUMENT` 返回，message 为可读字符串，例如：
 
@@ -305,7 +377,7 @@
 
 ---
 
-## 7. 连接池建议（客户端）
+## 8. 连接池建议（客户端）
 
 | 业务 QPS | 建议 MaxOpen | 说明 |
 |----------|--------------|------|
@@ -317,14 +389,15 @@
 
 ---
 
-## 8. Proto 源文件
+## 9. Proto 源文件
 
 ```
 proto/cryptooffload/v1/
 ├── common.proto
 ├── key_service.proto
 ├── sign_service.proto
-└── cms_service.proto
+├── cms_service.proto
+└── scep_service.proto
 ```
 
 生成代码：
@@ -336,7 +409,7 @@ cargo build  # Rust（tonic-build 自动生成）
 
 ---
 
-## 9. 各语言 Demo 入口
+## 10. 各语言 Demo 入口
 
 | 语言 | 路径 |
 |------|------|

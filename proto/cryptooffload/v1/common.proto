@@ -35,6 +35,8 @@ enum HashAlgorithm {
   HASH_SHA384 = 2;
   HASH_SHA512 = 3;
   HASH_SHA1 = 4;
+  // 国密 SM3（SM2 签名默认摘要）
+  HASH_SM3 = 5;
 }
 
 // 签名算法；未指定时由服务端根据密钥类型推断。
@@ -43,6 +45,10 @@ enum SignAlgorithm {
   SIGN_RSA_PKCS1_V15 = 1;
   SIGN_RSA_PSS = 2;
   SIGN_ECDSA = 3;
+  // 国密 SM2（摘要须为 SM3）
+  SIGN_SM2 = 4;
+  // Ed25519（纯 EdDSA，不使用外部 hash_algorithm）
+  SIGN_ED25519 = 5;
 }
 
 // CMS SignedData 内容封装方式。

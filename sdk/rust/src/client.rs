@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 
 use crate::pb::v1::cms_service_client::CmsServiceClient;
 use crate::pb::v1::key_service_client::KeyServiceClient;
+use crate::pb::v1::scep_service_client::ScepServiceClient;
 use crate::pb::v1::sign_service_client::SignServiceClient;
 use crate::pb::v1::*;
 use crate::pool::{Pool, PoolConfig, PooledConn};
@@ -132,6 +133,48 @@ impl Client {
         .await
     }
 
+    pub async fn parse_scep_request(
+        &self,
+        req: ParseScepRequestRequest,
+    ) -> Result<ParseScepRequestResponse> {
+        self.with_scep(|mut client| async move {
+            client
+                .parse_request(req)
+                .await
+                .map(|r| r.into_inner())
+                .context("ParseScepRequest rpc")
+        })
+        .await
+    }
+
+    pub async fn build_scep_success_cert_rep(
+        &self,
+        req: BuildScepSuccessCertRepRequest,
+    ) -> Result<BuildScepCertRepResponse> {
+        self.with_scep(|mut client| async move {
+            client
+                .build_success_cert_rep(req)
+                .await
+                .map(|r| r.into_inner())
+                .context("BuildScepSuccessCertRep rpc")
+        })
+        .await
+    }
+
+    pub async fn build_scep_failure_cert_rep(
+        &self,
+        req: BuildScepFailureCertRepRequest,
+    ) -> Result<BuildScepCertRepResponse> {
+        self.with_scep(|mut client| async move {
+            client
+                .build_failure_cert_rep(req)
+                .await
+                .map(|r| r.into_inner())
+                .context("BuildScepFailureCertRep rpc")
+        })
+        .await
+    }
+
     async fn with_key<F, Fut, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce(KeyServiceClient<tonic::transport::Channel>) -> Fut,
@@ -160,5 +203,15 @@ impl Client {
         let conn = self.pool.acquire().await?;
         let channel = conn.channel()?;
         f(CmsServiceClient::new(channel)).await
+    }
+
+    async fn with_scep<F, Fut, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(ScepServiceClient<tonic::transport::Channel>) -> Fut,
+        Fut: std::future::Future<Output = Result<T>>,
+    {
+        let conn = self.pool.acquire().await?;
+        let channel = conn.channel()?;
+        f(ScepServiceClient::new(channel)).await
     }
 }

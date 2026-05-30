@@ -6,6 +6,12 @@ import cryptooffload.v1.CmsServiceOuterClass.BuildCmsResponse;
 import cryptooffload.v1.KeyServiceGrpc;
 import cryptooffload.v1.KeyServiceOuterClass.ImportKeyRequest;
 import cryptooffload.v1.KeyServiceOuterClass.ImportKeyResponse;
+import cryptooffload.v1.ScepServiceGrpc;
+import cryptooffload.v1.ScepServiceOuterClass.BuildScepCertRepResponse;
+import cryptooffload.v1.ScepServiceOuterClass.BuildScepFailureCertRepRequest;
+import cryptooffload.v1.ScepServiceOuterClass.BuildScepSuccessCertRepRequest;
+import cryptooffload.v1.ScepServiceOuterClass.ParseScepRequestRequest;
+import cryptooffload.v1.ScepServiceOuterClass.ParseScepRequestResponse;
 import cryptooffload.v1.SignServiceGrpc;
 import cryptooffload.v1.SignServiceOuterClass.SignRequest;
 import cryptooffload.v1.SignServiceOuterClass.SignResponse;
@@ -50,6 +56,27 @@ public final class CryptoOffloadClient implements AutoCloseable {
     public BuildCmsResponse buildCms(BuildCmsRequest request) throws InterruptedException {
         try (GrpcConnectionPool.PooledConn conn = pool.acquire()) {
             return CmsServiceGrpc.newBlockingStub(conn.channel()).build(request);
+        }
+    }
+
+    public ParseScepRequestResponse parseScepRequest(ParseScepRequestRequest request)
+            throws InterruptedException {
+        try (GrpcConnectionPool.PooledConn conn = pool.acquire()) {
+            return ScepServiceGrpc.newBlockingStub(conn.channel()).parseRequest(request);
+        }
+    }
+
+    public BuildScepCertRepResponse buildScepSuccessCertRep(BuildScepSuccessCertRepRequest request)
+            throws InterruptedException {
+        try (GrpcConnectionPool.PooledConn conn = pool.acquire()) {
+            return ScepServiceGrpc.newBlockingStub(conn.channel()).buildSuccessCertRep(request);
+        }
+    }
+
+    public BuildScepCertRepResponse buildScepFailureCertRep(BuildScepFailureCertRepRequest request)
+            throws InterruptedException {
+        try (GrpcConnectionPool.PooledConn conn = pool.acquire()) {
+            return ScepServiceGrpc.newBlockingStub(conn.channel()).buildFailureCertRep(request);
         }
     }
 

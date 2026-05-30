@@ -10,7 +10,7 @@ import (
 	"github.com/cryptooffload/sdk-go/pool"
 )
 
-// Client 通过连接池访问 Key / Sign / CMS 服务。
+// Client 通过连接池访问 Key / Sign / CMS / SCEP 服务。
 type Client struct {
 	pool *pool.Pool
 }
@@ -173,6 +173,51 @@ func (c *Client) VerifyCMS(ctx context.Context, req *pb.VerifyCmsRequest) (*pb.V
 	err := c.withConn(ctx, func(conn *pool.Conn) error {
 		cli := pb.NewCmsServiceClient(conn.GRPC())
 		out, err := cli.Verify(ctx, req)
+		if err != nil {
+			return err
+		}
+		resp = out
+		return nil
+	})
+	return resp, err
+}
+
+// ParseScepRequest 解析 SCEP PKIO 请求。
+func (c *Client) ParseScepRequest(ctx context.Context, req *pb.ParseScepRequestRequest) (*pb.ParseScepRequestResponse, error) {
+	var resp *pb.ParseScepRequestResponse
+	err := c.withConn(ctx, func(conn *pool.Conn) error {
+		cli := pb.NewScepServiceClient(conn.GRPC())
+		out, err := cli.ParseRequest(ctx, req)
+		if err != nil {
+			return err
+		}
+		resp = out
+		return nil
+	})
+	return resp, err
+}
+
+// BuildScepSuccessCertRep 构建 SCEP SUCCESS CertRep。
+func (c *Client) BuildScepSuccessCertRep(ctx context.Context, req *pb.BuildScepSuccessCertRepRequest) (*pb.BuildScepCertRepResponse, error) {
+	var resp *pb.BuildScepCertRepResponse
+	err := c.withConn(ctx, func(conn *pool.Conn) error {
+		cli := pb.NewScepServiceClient(conn.GRPC())
+		out, err := cli.BuildSuccessCertRep(ctx, req)
+		if err != nil {
+			return err
+		}
+		resp = out
+		return nil
+	})
+	return resp, err
+}
+
+// BuildScepFailureCertRep 构建 SCEP FAILURE CertRep。
+func (c *Client) BuildScepFailureCertRep(ctx context.Context, req *pb.BuildScepFailureCertRepRequest) (*pb.BuildScepCertRepResponse, error) {
+	var resp *pb.BuildScepCertRepResponse
+	err := c.withConn(ctx, func(conn *pool.Conn) error {
+		cli := pb.NewScepServiceClient(conn.GRPC())
+		out, err := cli.BuildFailureCertRep(ctx, req)
 		if err != nil {
 			return err
 		}

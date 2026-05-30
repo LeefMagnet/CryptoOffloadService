@@ -1,9 +1,11 @@
-//! gRPC 压测客户端：测量 Sign/Verify/CMS/ImportKey 吞吐与延迟。
+//! gRPC 压测客户端：测量 Sign/Verify/CMS/SCEP/ImportKey 吞吐与延迟。
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use openssl::asn1::Asn1Time;
+use openssl::ec::{EcGroup, EcKey};
 use openssl::hash::MessageDigest;
+use openssl::nid::Nid;
 use openssl::pkey::PKey;
 use openssl::rsa::Rsa;
 use openssl::x509::{X509, X509Builder, X509NameBuilder};
@@ -20,10 +22,12 @@ pub mod cryptooffload {
 
 use cryptooffload::v1::cms_service_client::CmsServiceClient;
 use cryptooffload::v1::key_service_client::KeyServiceClient;
+use cryptooffload::v1::scep_service_client::ScepServiceClient;
 use cryptooffload::v1::sign_service_client::SignServiceClient;
 use cryptooffload::v1::{
-    BuildCmsRequest, HashAlgorithm, ImportKeyRequest, KeyFormat, KeyKind, KeyLifetime,
-    ParseCmsRequest, SignAlgorithm, SignRequest, VerifyCmsRequest, VerifyRequest,
+    BuildCmsRequest, BuildScepFailureCertRepRequest, BuildScepSuccessCertRepRequest,
+    HashAlgorithm, ImportKeyRequest, KeyFormat, KeyKind, KeyLifetime, ParseCmsRequest,
+    SignAlgorithm, SignRequest, VerifyCmsRequest, VerifyRequest,
 };
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -32,11 +36,20 @@ enum BenchMode {
     Sign,
     Verify,
     SignVerify,
+    SignRsaPss,
+    SignVerifyRsaPss,
+    SignSm2,
+    SignVerifySm2,
+    SignEd25519,
+    SignVerifyEd25519,
     CmsBuild,
     CmsParse,
     CmsVerify,
-    /// CMS 封包 + 解析往返（生产常见：build 响应 / parse 请求）
     CmsBuildParse,
+    /// SCEP SUCCESS CertRep（pkiStatus=0，含 3DES Envelop）
+    ScepCertrepSuccess,
+    /// SCEP FAILURE CertRep（pkiStatus=2，无 Envelop）
+    ScepCertrepFailure,
 }
 
 #[derive(Debug, Parser)]
@@ -45,7 +58,6 @@ struct Args {
     address: String,
     #[arg(long, value_enum, default_value_t = BenchMode::Sign)]
     mode: BenchMode,
-    /// 并发 gRPC 连接数（客户端侧），不是服务端 CPU 核数
     #[arg(long, default_value_t = 8)]
     clients: usize,
     #[arg(long, default_value_t = 20_000)]
@@ -58,7 +70,6 @@ struct Args {
     private_key_pem: Option<std::path::PathBuf>,
     #[arg(long)]
     certificate_pem: Option<std::path::PathBuf>,
-    /// 运维备注：服务端 cpuset / worker 配置（仅写入报告，不影响压测）
     #[arg(long, default_value = "")]
     server_profile: String,
 }
@@ -70,6 +81,14 @@ struct BenchKeys {
     sample_signature: Vec<u8>,
     payload: Vec<u8>,
     cms_der: Vec<u8>,
+    sm2_private_key_id: Option<String>,
+    sm2_public_key_id: Option<String>,
+    ed25519_private_key_id: String,
+    ed25519_public_key_id: String,
+    ca_key_id: String,
+    issued_cert_der: Vec<u8>,
+    wrapper_cert_der: Vec<u8>,
+    recipient_nonce: Vec<u8>,
 }
 
 #[tokio::main]
@@ -85,6 +104,10 @@ async fn main() -> Result<()> {
 
     let payload = vec![0xABu8; args.payload_size.max(1)];
     let keys = prepare_keys(&channel, &args, &payload).await?;
+
+    if requires_sm2(args.mode) && keys.sm2_private_key_id.is_none() {
+        anyhow::bail!("mode {:?} requires SM2 support in OpenSSL; unavailable on this host", args.mode);
+    }
 
     println!("warmup {}s ...", args.warmup_seconds);
     let warmup_deadline = Instant::now() + Duration::from_secs(args.warmup_seconds);
@@ -142,6 +165,10 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+fn requires_sm2(mode: BenchMode) -> bool {
+    matches!(mode, BenchMode::SignSm2 | BenchMode::SignVerifySm2)
+}
+
 fn print_env_banner(args: &Args) {
     let hostname = std::fs::read_to_string("/etc/hostname")
         .map(|s| s.trim().to_string())
@@ -168,7 +195,7 @@ fn print_env_banner(args: &Args) {
         println!("server_profile: {}", args.server_profile);
     } else {
         println!(
-            "server_profile: (unset — 请用 --server-profile 标注服务端 cpuset/worker 配置，例如 \"rust-cpuset-4-7,workers=4\")"
+            "server_profile: (unset — 请用 --server-profile 标注服务端 cpuset/worker 配置)"
         );
     }
     println!(
@@ -236,6 +263,14 @@ impl BenchKeys {
             sample_signature: self.sample_signature.clone(),
             payload: self.payload.clone(),
             cms_der: self.cms_der.clone(),
+            sm2_private_key_id: self.sm2_private_key_id.clone(),
+            sm2_public_key_id: self.sm2_public_key_id.clone(),
+            ed25519_private_key_id: self.ed25519_private_key_id.clone(),
+            ed25519_public_key_id: self.ed25519_public_key_id.clone(),
+            ca_key_id: self.ca_key_id.clone(),
+            issued_cert_der: self.issued_cert_der.clone(),
+            wrapper_cert_der: self.wrapper_cert_der.clone(),
+            recipient_nonce: self.recipient_nonce.clone(),
         }
     }
 }
@@ -245,53 +280,64 @@ async fn prepare_keys(channel: &Channel, args: &Args, payload: &[u8]) -> Result<
     let mut sign_client = SignServiceClient::new(channel.clone());
     let mut cms_client = CmsServiceClient::new(channel.clone());
 
-    let (priv_pem, cert_pem) = load_or_generate_key_material(args)?;
-    let cert_der = X509::from_pem(&cert_pem)?.to_der()?;
+    let (priv_pem, cert_der) = load_or_generate_key_material(args)?;
 
     let t0 = Instant::now();
 
-    let priv_meta = key_client
-        .import_key(ImportKeyRequest {
-            kind: KeyKind::Private as i32,
-            lifetime: KeyLifetime::Permanent as i32,
-            format: KeyFormat::Pem as i32,
-            key_data: priv_pem.clone(),
-            label: "bench-private".into(),
-            ..Default::default()
-        })
-        .await?
-        .into_inner()
-        .metadata
-        .context("import private key")?;
+    let priv_meta = import_private(&mut key_client, priv_pem.clone(), "bench-private", &[], KeyFormat::Unspecified).await?;
+    let pub_meta = import_public(&mut key_client, extract_public_pem(&priv_pem)?, "bench-public").await?;
+    let cms_meta = import_private(
+        &mut key_client,
+        priv_pem,
+        "bench-cms",
+        &cert_der,
+        KeyFormat::Der,
+    )
+    .await?;
 
-    let pub_meta = key_client
-        .import_key(ImportKeyRequest {
-            kind: KeyKind::Public as i32,
-            lifetime: KeyLifetime::Permanent as i32,
-            format: KeyFormat::Pem as i32,
-            key_data: extract_public_pem(&priv_pem)?,
-            label: "bench-public".into(),
-            ..Default::default()
-        })
-        .await?
-        .into_inner()
-        .metadata
-        .context("import public key")?;
+    // SCEP: CA + issued + wrapper（三份独立 RSA 证书）
+    let (ca_pem, ca_cert_der) = generate_rsa2048_pem()?;
+    let (_issued_pem, issued_cert_der) = generate_rsa2048_pem()?;
+    let (_wrapper_pem, wrapper_cert_der) = generate_rsa2048_pem()?;
+    let ca_meta = import_private(
+        &mut key_client,
+        ca_pem,
+        "bench-scep-ca",
+        &ca_cert_der,
+        KeyFormat::Der,
+    )
+    .await?;
 
-    let cms_meta = key_client
-        .import_key(ImportKeyRequest {
-            kind: KeyKind::Private as i32,
-            lifetime: KeyLifetime::Permanent as i32,
-            format: KeyFormat::Pem as i32,
-            key_data: priv_pem,
-            label: "bench-cms".into(),
-            certificate_data: cert_der,
-            certificate_format: KeyFormat::Der as i32,
-        })
-        .await?
-        .into_inner()
-        .metadata
-        .context("import cms key")?;
+    // Ed25519
+    let ed25519_pem = generate_ed25519_pem()?;
+    let ed25519_priv = import_private(&mut key_client, ed25519_pem.clone(), "bench-ed25519-priv", &[], KeyFormat::Unspecified).await?;
+    let ed25519_pub = import_public(&mut key_client, extract_public_pem(&ed25519_pem)?, "bench-ed25519-pub").await?;
+
+    // SM2（可选）
+    let (sm2_private_key_id, sm2_public_key_id) = match generate_sm2_pem() {
+            Ok((sm2_pem, sm2_cert_pem)) => {
+                let sm2_cert_der = X509::from_pem(&sm2_cert_pem)?.to_der()?;
+                let sm2_priv = import_private(
+                    &mut key_client,
+                    sm2_pem.clone(),
+                    "bench-sm2-priv",
+                    &sm2_cert_der,
+                    KeyFormat::Der,
+                )
+                .await?;
+                let sm2_pub = import_public(
+                    &mut key_client,
+                    extract_public_pem(&sm2_pem)?,
+                    "bench-sm2-pub",
+                )
+                .await?;
+                (Some(sm2_priv.key_id), Some(sm2_pub.key_id))
+            }
+            Err(e) => {
+                eprintln!("WARN: SM2 key generation unavailable: {e}");
+                (None, None)
+            }
+        };
 
     let cms_der = cms_client
         .build(BuildCmsRequest {
@@ -304,13 +350,12 @@ async fn prepare_keys(channel: &Channel, args: &Args, payload: &[u8]) -> Result<
         .into_inner()
         .cms_der;
 
-    let import_ms = t0.elapsed().as_secs_f64() * 1000.0;
     println!(
         "key_import_ms: {:.2} (one-time setup, excluded from qps)",
-        import_ms
+        t0.elapsed().as_secs_f64() * 1000.0
     );
 
-    let sig = sign_client
+    let sample_signature = sign_client
         .sign(SignRequest {
             key_id: priv_meta.key_id.clone(),
             data: payload.to_vec(),
@@ -325,15 +370,80 @@ async fn prepare_keys(channel: &Channel, args: &Args, payload: &[u8]) -> Result<
         private_key_id: priv_meta.key_id,
         public_key_id: pub_meta.key_id,
         cms_key_id: cms_meta.key_id,
-        sample_signature: sig,
+        sample_signature,
         payload: payload.to_vec(),
         cms_der,
+        sm2_private_key_id,
+        sm2_public_key_id,
+        ed25519_private_key_id: ed25519_priv.key_id,
+        ed25519_public_key_id: ed25519_pub.key_id,
+        ca_key_id: ca_meta.key_id,
+        issued_cert_der,
+        wrapper_cert_der,
+        recipient_nonce: vec![0x01, 0x02, 0x03, 0x04],
+    })
+}
+
+struct ImportedKey {
+    key_id: String,
+}
+
+async fn import_private(
+    client: &mut KeyServiceClient<Channel>,
+    key_data: Vec<u8>,
+    label: &str,
+    cert: &[u8],
+    cert_fmt: KeyFormat,
+) -> Result<ImportedKey> {
+    let meta = client
+        .import_key(ImportKeyRequest {
+            kind: KeyKind::Private as i32,
+            lifetime: KeyLifetime::Permanent as i32,
+            format: KeyFormat::Pem as i32,
+            key_data,
+            label: label.into(),
+            certificate_data: cert.to_vec(),
+            certificate_format: cert_fmt as i32,
+        })
+        .await?
+        .into_inner()
+        .metadata
+        .context("import private key")?;
+    Ok(ImportedKey {
+        key_id: meta.key_id,
+    })
+}
+
+async fn import_public(
+    client: &mut KeyServiceClient<Channel>,
+    key_data: Vec<u8>,
+    label: &str,
+) -> Result<ImportedKey> {
+    let meta = client
+        .import_key(ImportKeyRequest {
+            kind: KeyKind::Public as i32,
+            lifetime: KeyLifetime::Permanent as i32,
+            format: KeyFormat::Pem as i32,
+            key_data,
+            label: label.into(),
+            ..Default::default()
+        })
+        .await?
+        .into_inner()
+        .metadata
+        .context("import public key")?;
+    Ok(ImportedKey {
+        key_id: meta.key_id,
     })
 }
 
 fn load_or_generate_key_material(args: &Args) -> Result<(Vec<u8>, Vec<u8>)> {
     match (&args.private_key_pem, &args.certificate_pem) {
-        (Some(k), Some(c)) => Ok((std::fs::read(k)?, std::fs::read(c)?)),
+        (Some(k), Some(c)) => {
+            let cert_pem = std::fs::read(c)?;
+            let cert_der = X509::from_pem(&cert_pem)?.to_der()?;
+            Ok((std::fs::read(k)?, cert_der))
+        }
         (None, None) => generate_rsa2048_pem(),
         _ => anyhow::bail!("private-key-pem and certificate-pem must be provided together"),
     }
@@ -348,8 +458,7 @@ async fn run_one(channel: &Channel, mode: BenchMode, keys: &BenchKeys) -> Result
     match mode {
         BenchMode::ImportKey => {
             let (pem, _) = generate_rsa2048_pem()?;
-            let mut c = KeyServiceClient::new(channel.clone());
-            let _ = c
+            KeyServiceClient::new(channel.clone())
                 .import_key(ImportKeyRequest {
                     kind: KeyKind::Private as i32,
                     lifetime: KeyLifetime::Temporary as i32,
@@ -360,36 +469,32 @@ async fn run_one(channel: &Channel, mode: BenchMode, keys: &BenchKeys) -> Result
                 .await?;
         }
         BenchMode::Sign => {
-            let mut c = SignServiceClient::new(channel.clone());
-            let _ = c
+            sign_rsa_pkcs1(channel, keys).await?;
+        }
+        BenchMode::Verify => {
+            verify_rsa_pkcs1(channel, keys).await?;
+        }
+        BenchMode::SignVerify => {
+            sign_verify_rsa_pkcs1(channel, keys).await?;
+        }
+        BenchMode::SignRsaPss => {
+            SignServiceClient::new(channel.clone())
                 .sign(SignRequest {
                     key_id: keys.private_key_id.clone(),
                     data: keys.payload.clone(),
                     hash_algorithm: HashAlgorithm::HashSha256 as i32,
-                    sign_algorithm: SignAlgorithm::SignRsaPkcs1V15 as i32,
+                    sign_algorithm: SignAlgorithm::SignRsaPss as i32,
                 })
                 .await?;
         }
-        BenchMode::Verify => {
-            let mut c = SignServiceClient::new(channel.clone());
-            let _ = c
-                .verify(VerifyRequest {
-                    key_id: keys.public_key_id.clone(),
-                    data: keys.payload.clone(),
-                    signature: keys.sample_signature.clone(),
-                    hash_algorithm: HashAlgorithm::HashSha256 as i32,
-                    sign_algorithm: SignAlgorithm::SignRsaPkcs1V15 as i32,
-                })
-                .await?;
-        }
-        BenchMode::SignVerify => {
+        BenchMode::SignVerifyRsaPss => {
             let mut c = SignServiceClient::new(channel.clone());
             let sig = c
                 .sign(SignRequest {
                     key_id: keys.private_key_id.clone(),
                     data: keys.payload.clone(),
                     hash_algorithm: HashAlgorithm::HashSha256 as i32,
-                    sign_algorithm: SignAlgorithm::SignRsaPkcs1V15 as i32,
+                    sign_algorithm: SignAlgorithm::SignRsaPss as i32,
                 })
                 .await?
                 .into_inner()
@@ -400,13 +505,79 @@ async fn run_one(channel: &Channel, mode: BenchMode, keys: &BenchKeys) -> Result
                     data: keys.payload.clone(),
                     signature: sig,
                     hash_algorithm: HashAlgorithm::HashSha256 as i32,
-                    sign_algorithm: SignAlgorithm::SignRsaPkcs1V15 as i32,
+                    sign_algorithm: SignAlgorithm::SignRsaPss as i32,
+                })
+                .await?;
+        }
+        BenchMode::SignSm2 => {
+            let priv_id = keys.sm2_private_key_id.as_ref().context("sm2 key")?;
+            SignServiceClient::new(channel.clone())
+                .sign(SignRequest {
+                    key_id: priv_id.clone(),
+                    data: keys.payload.clone(),
+                    sign_algorithm: SignAlgorithm::SignSm2 as i32,
+                    ..Default::default()
+                })
+                .await?;
+        }
+        BenchMode::SignVerifySm2 => {
+            let priv_id = keys.sm2_private_key_id.as_ref().context("sm2 key")?;
+            let pub_id = keys.sm2_public_key_id.as_ref().context("sm2 key")?;
+            let mut c = SignServiceClient::new(channel.clone());
+            let sig = c
+                .sign(SignRequest {
+                    key_id: priv_id.clone(),
+                    data: keys.payload.clone(),
+                    sign_algorithm: SignAlgorithm::SignSm2 as i32,
+                    ..Default::default()
+                })
+                .await?
+                .into_inner()
+                .signature;
+            let _ = c
+                .verify(VerifyRequest {
+                    key_id: pub_id.clone(),
+                    data: keys.payload.clone(),
+                    signature: sig,
+                    sign_algorithm: SignAlgorithm::SignSm2 as i32,
+                    ..Default::default()
+                })
+                .await?;
+        }
+        BenchMode::SignEd25519 => {
+            SignServiceClient::new(channel.clone())
+                .sign(SignRequest {
+                    key_id: keys.ed25519_private_key_id.clone(),
+                    data: keys.payload.clone(),
+                    sign_algorithm: SignAlgorithm::SignEd25519 as i32,
+                    ..Default::default()
+                })
+                .await?;
+        }
+        BenchMode::SignVerifyEd25519 => {
+            let mut c = SignServiceClient::new(channel.clone());
+            let sig = c
+                .sign(SignRequest {
+                    key_id: keys.ed25519_private_key_id.clone(),
+                    data: keys.payload.clone(),
+                    sign_algorithm: SignAlgorithm::SignEd25519 as i32,
+                    ..Default::default()
+                })
+                .await?
+                .into_inner()
+                .signature;
+            let _ = c
+                .verify(VerifyRequest {
+                    key_id: keys.ed25519_public_key_id.clone(),
+                    data: keys.payload.clone(),
+                    signature: sig,
+                    sign_algorithm: SignAlgorithm::SignEd25519 as i32,
+                    ..Default::default()
                 })
                 .await?;
         }
         BenchMode::CmsBuild => {
-            let mut c = CmsServiceClient::new(channel.clone());
-            let _ = c
+            CmsServiceClient::new(channel.clone())
                 .build(BuildCmsRequest {
                     content: keys.payload.clone(),
                     sign_key_id: keys.cms_key_id.clone(),
@@ -416,8 +587,7 @@ async fn run_one(channel: &Channel, mode: BenchMode, keys: &BenchKeys) -> Result
                 .await?;
         }
         BenchMode::CmsParse => {
-            let mut c = CmsServiceClient::new(channel.clone());
-            let _ = c
+            CmsServiceClient::new(channel.clone())
                 .parse(ParseCmsRequest {
                     cms_der: keys.cms_der.clone(),
                     ..Default::default()
@@ -425,8 +595,7 @@ async fn run_one(channel: &Channel, mode: BenchMode, keys: &BenchKeys) -> Result
                 .await?;
         }
         BenchMode::CmsVerify => {
-            let mut c = CmsServiceClient::new(channel.clone());
-            let _ = c
+            CmsServiceClient::new(channel.clone())
                 .verify(VerifyCmsRequest {
                     cms_der: keys.cms_der.clone(),
                     verify_key_id: keys.public_key_id.clone(),
@@ -453,7 +622,80 @@ async fn run_one(channel: &Channel, mode: BenchMode, keys: &BenchKeys) -> Result
                 })
                 .await?;
         }
+        BenchMode::ScepCertrepSuccess => {
+            ScepServiceClient::new(channel.clone())
+                .build_success_cert_rep(BuildScepSuccessCertRepRequest {
+                    ca_key_id: keys.ca_key_id.clone(),
+                    transaction_id: "bench-tx-success".into(),
+                    recipient_nonce: keys.recipient_nonce.clone(),
+                    issued_cert_der: keys.issued_cert_der.clone(),
+                    wrapper_cert_der: keys.wrapper_cert_der.clone(),
+                    ..Default::default()
+                })
+                .await?;
+        }
+        BenchMode::ScepCertrepFailure => {
+            ScepServiceClient::new(channel.clone())
+                .build_failure_cert_rep(BuildScepFailureCertRepRequest {
+                    ca_key_id: keys.ca_key_id.clone(),
+                    transaction_id: "bench-tx-failure".into(),
+                    recipient_nonce: keys.recipient_nonce.clone(),
+                    fail_info: 2,
+                    fail_info_text: "benchmark bad request".into(),
+                    ..Default::default()
+                })
+                .await?;
+        }
     }
+    Ok(())
+}
+
+async fn sign_rsa_pkcs1(channel: &Channel, keys: &BenchKeys) -> Result<()> {
+    SignServiceClient::new(channel.clone())
+        .sign(SignRequest {
+            key_id: keys.private_key_id.clone(),
+            data: keys.payload.clone(),
+            hash_algorithm: HashAlgorithm::HashSha256 as i32,
+            sign_algorithm: SignAlgorithm::SignRsaPkcs1V15 as i32,
+        })
+        .await?;
+    Ok(())
+}
+
+async fn verify_rsa_pkcs1(channel: &Channel, keys: &BenchKeys) -> Result<()> {
+    SignServiceClient::new(channel.clone())
+        .verify(VerifyRequest {
+            key_id: keys.public_key_id.clone(),
+            data: keys.payload.clone(),
+            signature: keys.sample_signature.clone(),
+            hash_algorithm: HashAlgorithm::HashSha256 as i32,
+            sign_algorithm: SignAlgorithm::SignRsaPkcs1V15 as i32,
+        })
+        .await?;
+    Ok(())
+}
+
+async fn sign_verify_rsa_pkcs1(channel: &Channel, keys: &BenchKeys) -> Result<()> {
+    let mut c = SignServiceClient::new(channel.clone());
+    let sig = c
+        .sign(SignRequest {
+            key_id: keys.private_key_id.clone(),
+            data: keys.payload.clone(),
+            hash_algorithm: HashAlgorithm::HashSha256 as i32,
+            sign_algorithm: SignAlgorithm::SignRsaPkcs1V15 as i32,
+        })
+        .await?
+        .into_inner()
+        .signature;
+    let _ = c
+        .verify(VerifyRequest {
+            key_id: keys.public_key_id.clone(),
+            data: keys.payload.clone(),
+            signature: sig,
+            hash_algorithm: HashAlgorithm::HashSha256 as i32,
+            sign_algorithm: SignAlgorithm::SignRsaPkcs1V15 as i32,
+        })
+        .await?;
     Ok(())
 }
 
@@ -477,7 +719,31 @@ fn generate_rsa2048_pem() -> Result<(Vec<u8>, Vec<u8>)> {
     builder.set_not_after(&not_after)?;
     builder.sign(&pkey, MessageDigest::sha256())?;
     let cert = builder.build();
-    let cert_pem = cert.to_pem()?;
+    Ok((priv_pem, cert.to_der()?))
+}
 
-    Ok((priv_pem, cert_pem))
+fn generate_ed25519_pem() -> Result<Vec<u8>> {
+    Ok(PKey::generate_ed25519()?.private_key_to_pem_pkcs8()?)
+}
+
+fn generate_sm2_pem() -> Result<(Vec<u8>, Vec<u8>)> {
+    let group = EcGroup::from_curve_name(Nid::SM2)?;
+    let ec_key = EcKey::generate(&group)?;
+    let pkey = PKey::from_ec_key(ec_key)?;
+    let priv_pem = pkey.private_key_to_pem_pkcs8()?;
+
+    let mut name = X509NameBuilder::new()?;
+    name.append_entry_by_text("CN", "bench-sm2")?;
+    let name = name.build();
+    let mut builder = X509Builder::new()?;
+    builder.set_version(2)?;
+    builder.set_subject_name(&name)?;
+    builder.set_issuer_name(&name)?;
+    builder.set_pubkey(&pkey)?;
+    let not_before = Asn1Time::days_from_now(0).context("not_before")?;
+    let not_after = Asn1Time::days_from_now(365).context("not_after")?;
+    builder.set_not_before(&not_before)?;
+    builder.set_not_after(&not_after)?;
+    builder.sign(&pkey, MessageDigest::sm3())?;
+    Ok((priv_pem, builder.build().to_pem()?))
 }

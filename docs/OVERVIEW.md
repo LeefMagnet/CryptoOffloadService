@@ -215,7 +215,7 @@ Java 21 可用**虚拟线程** + blocking SDK，等待 offload 时不占满平�
 | 密钥存储 | 进程内存，**非**跨重启持久化 |
 | HSM | 不支持；私钥经 ImportKey 进入内存 |
 | 独立 Hash RPC | 无；摘要内置于 Sign |
-| SM2 | 需 OpenSSL 国密支持（部分环境需额外编译） |
+| SM2 / SM3（国密） | 需 **OpenSSL 3.0+**（Provider 架构内置国密算法）；OpenSSL 1.1.x 不支持；部署前确认运行环境的 OpenSSL 版本与 default provider |
 | SCEP Parse 压测 | PKIO fixture 压测时本地生成；生产用真实终端报文 |
 
 ---
@@ -236,6 +236,7 @@ Java 21 可用**虚拟线程** + blocking SDK，等待 offload 时不占满平�
 
 - **Proto 包**：`cryptooffload.v1`
 - **默认端口**：`50051`
+- **OpenSSL**：**3.0+**（推荐 3.x）；SCEP 3DES 需加载 **legacy provider**；**SM2/SM3 国密自 3.0 起可用**，1.1.x 不支持
 - **当前版本**：0.1.x（见 git tag / Cargo.toml）
 
 **快速验证**

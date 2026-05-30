@@ -21,8 +21,9 @@
 |------|-----|------|
 | **KeyService** | `ImportKey` | 导入公钥/私钥/证书，返回 `key_id` |
 | | `DeleteKey` / `GetKeyInfo` / `ListKeys` | 密钥生命周期管理 |
-| **SignService** | `Sign` / `Verify` | 通过 `key_id` 签名/验签，可选摘要算法 |
+| **SignService** | `Sign` / `Verify` | RSA / ECDSA / **SM2** / **Ed25519** 签名/验签 |
 | **CmsService** | `Parse` / `Build` / `Verify` | CMS/PKCS#7 解析、封装、验签 |
+| **ScepService** | `ParseRequest` / `BuildSuccessCertRep` / `BuildFailureCertRep` | SCEP PKIO 解析与 CertRep 构建 |
 
 ### 密钥管理（类 KMS）
 
@@ -43,7 +44,8 @@
 
 | 文档 | 说明 |
 |------|------|
-| [docs/API.md](docs/API.md) | **Protobuf API 完整参考**（字段、枚举、错误码） |
+| [docs/OVERVIEW.md](docs/OVERVIEW.md) | **方案与能力总览**（宣讲 / 架构评审 / onboarding） |
+| [docs/API.md](docs/API.md) | **Protobuf API 完整参考**（字段、枚举、流程图、示例） |
 | [docs/BENCHMARK_AND_TUNING.md](docs/BENCHMARK_AND_TUNING.md) | **压测与容器资源配置指南** |
 | [docs/STABILITY.md](docs/STABILITY.md) | **服务端稳定性加固与可选优化** |
 
@@ -76,7 +78,7 @@ make benchmark
 - **永久密钥**：启动或轮换时 import 一次，热路径只传 `key_id`
 - **临时密钥**：首次运算后自动销毁
 
-详见 [docs/API.md §1.3](docs/API.md#13-密钥存储模型重要)。
+详见 [docs/API.md §1.6](docs/API.md#16-密钥存储模型重要)。
 
 ## 测试验证
 
@@ -223,6 +225,7 @@ deploy/                 # Docker / Compose
 - `cryptooffload/v1/key_service.proto` — 密钥管理
 - `cryptooffload/v1/sign_service.proto` — 签名/验签
 - `cryptooffload/v1/cms_service.proto` — CMS 操作
+- `cryptooffload/v1/scep_service.proto` — SCEP PKIO / CertRep
 
 ## 与 ScepAccelerator 的关系
 

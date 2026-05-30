@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package cryptooffload.v1;
+
+import "cryptooffload/v1/common.proto";
+
+option go_package = "github.com/cryptooffload/sdk-go/gen/cryptooffload/v1;cryptooffloadv1";
+option java_package = "cryptooffload.v1";
+option java_multiple_files = true;
+
+// 类 KMS 的密钥导入与管理；密钥材料仅在导入时传输，后续运算通过 key_id 引用。
+service KeyService {
+  rpc ImportKey(ImportKeyRequest) returns (ImportKeyResponse);
+  rpc DeleteKey(DeleteKeyRequest) returns (DeleteKeyResponse);
+  rpc GetKeyInfo(GetKeyInfoRequest) returns (GetKeyInfoResponse);
+  rpc ListKeys(ListKeysRequest) returns (ListKeysResponse);
+}
+
+message ImportKeyRequest {
+  KeyKind kind = 1;
+  KeyLifetime lifetime = 2;
+  KeyFormat format = 3;
+  bytes key_data = 4;
+  string label = 5;
+  // 可选：证书 DER/PEM，与私钥一并导入（CMS 签名常用）。
+  bytes certificate_data = 6;
+  KeyFormat certificate_format = 7;
+}
+
+message ImportKeyResponse {
+  KeyMetadata metadata = 1;
+}
+
+message DeleteKeyRequest {
+  string key_id = 1;
+}
+
+message DeleteKeyResponse {
+  bool deleted = 1;
+}
+
+message GetKeyInfoRequest {
+  string key_id = 1;
+}
+
+message GetKeyInfoResponse {
+  KeyMetadata metadata = 1;
+}
+
+message ListKeysRequest {}
+
+message ListKeysResponse {
+  repeated KeyMetadata keys = 1;
+}

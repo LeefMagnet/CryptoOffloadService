@@ -1,0 +1,15 @@
+services:
+  crypto-offload:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    ports:
+      - "50051:50051"
+    command:
+      - --listen
+      - "0.0.0.0:50051"
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+    restart: unless-stopped

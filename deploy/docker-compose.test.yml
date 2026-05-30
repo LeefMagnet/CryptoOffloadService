@@ -1,0 +1,37 @@
+# Docker 内端到端测试：server + test-runner 同网络，test 退出码即 CI 结果。
+services:
+  crypto-offload:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: runtime
+    expose:
+      - "50051"
+    command:
+      - --listen
+      - "0.0.0.0:50051"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/127.0.0.1/50051'"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 3s
+    networks:
+      - testnet
+
+  test-runner:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: test-runner
+    depends_on:
+      crypto-offload:
+        condition: service_healthy
+    environment:
+      CRYPTO_OFFLOAD_ADDR: crypto-offload:50051
+    networks:
+      - testnet
+
+networks:
+  testnet:
+    driver: bridge

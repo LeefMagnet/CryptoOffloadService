@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package cryptooffload.v1;
+
+import "cryptooffload/v1/common.proto";
+
+option go_package = "github.com/cryptooffload/sdk-go/gen/cryptooffload/v1;cryptooffloadv1";
+option java_package = "cryptooffload.v1";
+option java_multiple_files = true;
+
+service CmsService {
+  // 解析 CMS SignedData，可选使用 decrypt_key_id 解密 EnvelopedData 内层。
+  rpc Parse(ParseCmsRequest) returns (ParseCmsResponse);
+  // 构建 CMS SignedData；sign_key_id 必须为私钥（可含证书）。
+  rpc Build(BuildCmsRequest) returns (BuildCmsResponse);
+  // 验签 CMS SignedData；verify_key_id 为公钥或证书。
+  rpc Verify(VerifyCmsRequest) returns (VerifyCmsResponse);
+}
+
+message ParseCmsRequest {
+  bytes cms_der = 1;
+  string decrypt_key_id = 2;
+}
+
+message ParseCmsResponse {
+  bytes content = 1;
+  repeated bytes signer_certificates = 2;
+}
+
+message BuildCmsRequest {
+  bytes content = 1;
+  string sign_key_id = 2;
+  CmsContentType content_type = 3;
+  bool detached = 4;
+  repeated bytes extra_certificates = 5;
+}
+
+message BuildCmsResponse {
+  bytes cms_der = 1;
+}
+
+message VerifyCmsRequest {
+  bytes cms_der = 1;
+  string verify_key_id = 2;
+  bytes content = 3;
+}
+
+message VerifyCmsResponse {
+  bool valid = 1;
+}

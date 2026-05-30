@@ -1,0 +1,260 @@
+use std::sync::Arc;
+
+use tonic::{Request, Response, Status};
+
+use crate::crypto_cms;
+use crate::crypto_sign;
+use crate::key_store::KeyStore;
+use crate::pb::cms_service_server::CmsService;
+use crate::pb::key_service_server::KeyService;
+use crate::pb::sign_service_server::SignService;
+use crate::pb::*;
+
+const MAX_SMALL_PACKET: usize = 1024 * 1024;
+
+pub struct AppState {
+    pub keys: KeyStore,
+}
+
+pub struct KeyServiceImpl {
+    state: Arc<AppState>,
+}
+
+pub struct SignServiceImpl {
+    state: Arc<AppState>,
+}
+
+pub struct CmsServiceImpl {
+    state: Arc<AppState>,
+}
+
+impl KeyServiceImpl {
+    pub fn new(state: Arc<AppState>) -> Self {
+        Self { state }
+    }
+}
+
+impl SignServiceImpl {
+    pub fn new(state: Arc<AppState>) -> Self {
+        Self { state }
+    }
+}
+
+impl CmsServiceImpl {
+    pub fn new(state: Arc<AppState>) -> Self {
+        Self { state }
+    }
+}
+
+#[tonic::async_trait]
+impl KeyService for KeyServiceImpl {
+    async fn import_key(
+        &self,
+        request: Request<ImportKeyRequest>,
+    ) -> Result<Response<ImportKeyResponse>, Status> {
+        let req = request.into_inner();
+        if req.key_data.len() > MAX_SMALL_PACKET || req.certificate_data.len() > MAX_SMALL_PACKET {
+            return Err(Status::invalid_argument("key or certificate data too large"));
+        }
+        let metadata = self
+            .state
+            .keys
+            .import_key(
+                req.kind,
+                req.lifetime,
+                req.format,
+                &req.key_data,
+                &req.label,
+                &req.certificate_data,
+                req.certificate_format,
+            )
+            .map_err(map_err)?;
+        Ok(Response::new(ImportKeyResponse {
+            metadata: Some(metadata),
+        }))
+    }
+
+    async fn delete_key(
+        &self,
+        request: Request<DeleteKeyRequest>,
+    ) -> Result<Response<DeleteKeyResponse>, Status> {
+        let req = request.into_inner();
+        let deleted = self
+            .state
+            .keys
+            .delete_key(&req.key_id)
+            .map_err(map_err)?;
+        Ok(Response::new(DeleteKeyResponse { deleted }))
+    }
+
+    async fn get_key_info(
+        &self,
+        request: Request<GetKeyInfoRequest>,
+    ) -> Result<Response<GetKeyInfoResponse>, Status> {
+        let req = request.into_inner();
+        let metadata = self.state.keys.get_metadata(&req.key_id).map_err(map_err)?;
+        Ok(Response::new(GetKeyInfoResponse {
+            metadata: Some(metadata),
+        }))
+    }
+
+    async fn list_keys(
+        &self,
+        _request: Request<ListKeysRequest>,
+    ) -> Result<Response<ListKeysResponse>, Status> {
+        Ok(Response::new(ListKeysResponse {
+            keys: self.state.keys.list_metadata(),
+        }))
+    }
+}
+
+#[tonic::async_trait]
+impl SignService for SignServiceImpl {
+    async fn sign(
+        &self,
+        request: Request<SignRequest>,
+    ) -> Result<Response<SignResponse>, Status> {
+        let req = request.into_inner();
+        if req.data.len() > MAX_SMALL_PACKET {
+            return Err(Status::invalid_argument("data too large"));
+        }
+        let access = self.state.keys.access_key(&req.key_id).map_err(map_err)?;
+        let data = req.data;
+        let hash_algorithm = req.hash_algorithm;
+        let sign_algorithm = req.sign_algorithm;
+        let output = tokio::task::spawn_blocking(move || {
+            crypto_sign::sign(access, &data, hash_algorithm, sign_algorithm)
+        })
+        .await
+        .map_err(|e| Status::internal(e.to_string()))?
+        .map_err(map_err)?;
+
+        Ok(Response::new(SignResponse {
+            signature: output.signature,
+            hash_algorithm: output.hash_algorithm,
+            sign_algorithm: output.sign_algorithm,
+        }))
+    }
+
+    async fn verify(
+        &self,
+        request: Request<VerifyRequest>,
+    ) -> Result<Response<VerifyResponse>, Status> {
+        let req = request.into_inner();
+        if req.data.len() > MAX_SMALL_PACKET || req.signature.len() > MAX_SMALL_PACKET {
+            return Err(Status::invalid_argument("data or signature too large"));
+        }
+        let access = self.state.keys.access_key(&req.key_id).map_err(map_err)?;
+        let data = req.data;
+        let signature = req.signature;
+        let hash_algorithm = req.hash_algorithm;
+        let sign_algorithm = req.sign_algorithm;
+        let valid = tokio::task::spawn_blocking(move || {
+            crypto_sign::verify(
+                access,
+                &data,
+                &signature,
+                hash_algorithm,
+                sign_algorithm,
+            )
+        })
+        .await
+        .map_err(|e| Status::internal(e.to_string()))?
+        .map_err(map_err)?;
+
+        Ok(Response::new(VerifyResponse { valid }))
+    }
+}
+
+#[tonic::async_trait]
+impl CmsService for CmsServiceImpl {
+    async fn parse(
+        &self,
+        request: Request<ParseCmsRequest>,
+    ) -> Result<Response<ParseCmsResponse>, Status> {
+        let req = request.into_inner();
+        if req.cms_der.len() > MAX_SMALL_PACKET {
+            return Err(Status::invalid_argument("cms_der too large"));
+        }
+        let access = if req.decrypt_key_id.is_empty() {
+            None
+        } else {
+            Some(
+                self.state
+                    .keys
+                    .access_key(&req.decrypt_key_id)
+                    .map_err(map_err)?,
+            )
+        };
+        let cms_der = req.cms_der;
+        let parsed = tokio::task::spawn_blocking(move || crypto_cms::parse_cms(&cms_der, access))
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?
+            .map_err(map_err)?;
+
+        Ok(Response::new(ParseCmsResponse {
+            content: parsed.0,
+            signer_certificates: parsed.1,
+        }))
+    }
+
+    async fn build(
+        &self,
+        request: Request<BuildCmsRequest>,
+    ) -> Result<Response<BuildCmsResponse>, Status> {
+        let req = request.into_inner();
+        if req.content.len() > MAX_SMALL_PACKET {
+            return Err(Status::invalid_argument("content too large"));
+        }
+        for cert in &req.extra_certificates {
+            if cert.len() > MAX_SMALL_PACKET {
+                return Err(Status::invalid_argument("extra certificate too large"));
+            }
+        }
+        let access = self
+            .state
+            .keys
+            .access_key(&req.sign_key_id)
+            .map_err(map_err)?;
+        let content = req.content;
+        let extra = req.extra_certificates;
+        let detached = req.detached;
+        let cms_der = tokio::task::spawn_blocking(move || {
+            crypto_cms::build_cms(&content, access, detached, &extra)
+        })
+        .await
+        .map_err(|e| Status::internal(e.to_string()))?
+        .map_err(map_err)?;
+
+        Ok(Response::new(BuildCmsResponse { cms_der }))
+    }
+
+    async fn verify(
+        &self,
+        request: Request<VerifyCmsRequest>,
+    ) -> Result<Response<VerifyCmsResponse>, Status> {
+        let req = request.into_inner();
+        if req.cms_der.len() > MAX_SMALL_PACKET || req.content.len() > MAX_SMALL_PACKET {
+            return Err(Status::invalid_argument("cms_der or content too large"));
+        }
+        let access = self
+            .state
+            .keys
+            .access_key(&req.verify_key_id)
+            .map_err(map_err)?;
+        let cms_der = req.cms_der;
+        let content = req.content;
+        let valid = tokio::task::spawn_blocking(move || {
+            crypto_cms::verify_cms(&cms_der, access, &content)
+        })
+        .await
+        .map_err(|e| Status::internal(e.to_string()))?
+        .map_err(map_err)?;
+
+        Ok(Response::new(VerifyCmsResponse { valid }))
+    }
+}
+
+fn map_err(err: anyhow::Error) -> Status {
+    Status::invalid_argument(err.to_string())
+}

@@ -1,0 +1,19 @@
+version: v2
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/cryptooffload/sdk-go/gen
+plugins:
+  - remote: buf.build/protocolbuffers/go
+    out: sdk/go/gen
+    opt:
+      - paths=source_relative
+  - remote: buf.build/grpc/go
+    out: sdk/go/gen
+    opt:
+      - paths=source_relative
+  - remote: buf.build/protocolbuffers/python
+    out: sdk/python/cryptooffload/gen
+  - remote: buf.build/grpc/python
+    out: sdk/python/cryptooffload/gen

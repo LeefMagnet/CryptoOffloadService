@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package cryptooffload.v1;
+
+option go_package = "github.com/cryptooffload/sdk-go/gen/cryptooffload/v1;cryptooffloadv1";
+option java_package = "cryptooffload.v1";
+option java_multiple_files = true;
+
+// 密钥种类：私钥可用于签名/解密，公钥可用于验签/加密。
+enum KeyKind {
+  KEY_KIND_UNSPECIFIED = 0;
+  KEY_KIND_PRIVATE = 1;
+  KEY_KIND_PUBLIC = 2;
+  KEY_KIND_CERTIFICATE = 3;
+}
+
+// 密钥生命周期：临时密钥在首次密码运算后自动销毁。
+enum KeyLifetime {
+  KEY_LIFETIME_UNSPECIFIED = 0;
+  KEY_LIFETIME_PERMANENT = 1;
+  KEY_LIFETIME_TEMPORARY = 2;
+}
+
+// 密钥材料编码格式。
+enum KeyFormat {
+  KEY_FORMAT_UNSPECIFIED = 0;
+  KEY_FORMAT_DER = 1;
+  KEY_FORMAT_PEM = 2;
+}
+
+// 签名时可选的摘要算法（服务端对 data 做摘要后再签名）。
+enum HashAlgorithm {
+  HASH_ALGORITHM_UNSPECIFIED = 0;
+  HASH_SHA256 = 1;
+  HASH_SHA384 = 2;
+  HASH_SHA512 = 3;
+  HASH_SHA1 = 4;
+}
+
+// 签名算法；未指定时由服务端根据密钥类型推断。
+enum SignAlgorithm {
+  SIGN_ALGORITHM_UNSPECIFIED = 0;
+  SIGN_RSA_PKCS1_V15 = 1;
+  SIGN_RSA_PSS = 2;
+  SIGN_ECDSA = 3;
+}
+
+// CMS SignedData 内容封装方式。
+enum CmsContentType {
+  CMS_CONTENT_TYPE_UNSPECIFIED = 0;
+  CMS_CONTENT_DATA = 1;
+  CMS_CONTENT_DIGESTED = 2;
+}
+
+message KeyMetadata {
+  string key_id = 1;
+  KeyKind kind = 2;
+  KeyLifetime lifetime = 3;
+  string label = 4;
+  string algorithm = 5;
+  int32 key_bits = 6;
+  bool used = 7;
+}
+
+message Empty {}

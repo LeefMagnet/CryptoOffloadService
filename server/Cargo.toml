@@ -1,0 +1,39 @@
+[package]
+name = "crypto-offload-server"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "crypto-offload-server"
+path = "src/main.rs"
+
+[[bin]]
+name = "crypto-offload-benchmark"
+path = "src/bin/benchmark.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+openssl = "0.10"
+prost = "0.13"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tonic = "0.12"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+rand = "0.8"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tonic = "0.12"
+prost = "0.13"
+
+[build-dependencies]
+tonic-build = "0.12"
+
+[features]
+vendored-openssl = ["openssl/vendored"]
+test-support = []

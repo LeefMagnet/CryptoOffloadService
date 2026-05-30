@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# 全模式压测套件：输出 CPU/ cpuset 环境 + Sign/Verify/CMS 全部模式。
+# 用法：
+#   # 终端1：按目标核数启动服务端（示例 4 核）
+#   taskset -c 4-7 ./target/release/crypto-offload-server --listen 127.0.0.1:50051
+#
+#   # 终端2：跑套件（标注 server 配置）
+#   SERVER_PROFILE="rust-cpuset-4-7,unlimited-cpu" CLIENTS=4 bash scripts/benchmark/run_suite.sh
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$ROOT"
+
+export PATH="${HOME}/.cargo/bin:/usr/bin:/bin:${PATH:-}}"
+
+ADDR="${ADDR:-127.0.0.1:50051}"
+CLIENTS="${CLIENTS:-4}"
+TOTAL="${TOTAL:-5000}"
+WARMUP="${WARMUP:-2}"
+PAYLOAD="${PAYLOAD:-256}"
+SERVER_PROFILE="${SERVER_PROFILE:-unset}"
+OUT="${OUT:-benchmark_report.txt}"
+
+BIN="$ROOT/target/release/crypto-offload-benchmark"
+if [[ ! -x "$BIN" ]]; then
+  echo "==> building benchmark..."
+  cargo build --release -p crypto-offload-server --bin crypto-offload-benchmark
+fi
+
+{
+  echo "=== CryptoOffload benchmark suite ==="
+  echo "date: $(date -Iseconds)"
+  echo "addr: ${ADDR}"
+  echo "clients: ${CLIENTS}"
+  echo "total_per_mode: ${TOTAL}"
+  echo "payload_bytes: ${PAYLOAD}"
+  echo "server_profile: ${SERVER_PROFILE}"
+  echo "cpu_logical: $(nproc 2>/dev/null || echo unknown)"
+  if command -v lscpu >/dev/null; then
+    echo "cpu_model: $(lscpu | awk -F: '/Model name/{gsub(/^ +/,"",$2); print $2; exit}')"
+    echo "cpu_socket_cores: $(lscpu | awk -F: '/Core\\(s\\) per socket/{print $2}' | xargs)"
+    echo "cpu_threads_per_core: $(lscpu | awk -F: '/Thread\\(s\\) per core/{print $2}' | xargs)"
+  fi
+  if [[ -r /sys/fs/cgroup/cpuset.cpus.effective ]]; then
+    echo "process_cpuset: $(cat /sys/fs/cgroup/cpuset.cpus.effective)"
+  fi
+  echo
+
+  MODES=(sign verify sign-verify cms-build cms-parse cms-verify cms-build-parse import-key)
+  for mode in "${MODES[@]}"; do
+    echo "######## mode=${mode} ########"
+    "$BIN" \
+      --address "http://${ADDR}" \
+      --mode "${mode}" \
+      --clients "${CLIENTS}" \
+      --total-requests "${TOTAL}" \
+      --warmup-seconds "${WARMUP}" \
+      --payload-size "${PAYLOAD}" \
+      --server-profile "${SERVER_PROFILE}"
+    echo
+  done
+} 2>&1 | tee "${OUT}"
+
+echo "==> report saved to ${OUT}"

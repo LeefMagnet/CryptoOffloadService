@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package cryptooffload.v1;
+
+import "cryptooffload/v1/common.proto";
+
+option go_package = "github.com/cryptooffload/sdk-go/gen/cryptooffload/v1;cryptooffloadv1";
+option java_package = "cryptooffload.v1";
+option java_multiple_files = true;
+
+service SignService {
+  rpc Sign(SignRequest) returns (SignResponse);
+  rpc Verify(VerifyRequest) returns (VerifyResponse);
+}
+
+message SignRequest {
+  string key_id = 1;
+  bytes data = 2;
+  HashAlgorithm hash_algorithm = 3;
+  SignAlgorithm sign_algorithm = 4;
+}
+
+message SignResponse {
+  bytes signature = 1;
+  HashAlgorithm hash_algorithm = 2;
+  SignAlgorithm sign_algorithm = 3;
+}
+
+message VerifyRequest {
+  string key_id = 1;
+  bytes data = 2;
+  bytes signature = 3;
+  HashAlgorithm hash_algorithm = 4;
+  SignAlgorithm sign_algorithm = 5;
+}
+
+message VerifyResponse {
+  bool valid = 1;
+}

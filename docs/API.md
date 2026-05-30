@@ -5,6 +5,8 @@
 > 默认地址：`127.0.0.1:50051`  
 > 单字段大小上限：**1 MiB**（面向小包场景）
 
+**文档结构**：§1 集成总览与流程图 → §2 公共枚举 → §3–6 各服务 RPC 详情 → §7 排错 → §8–11 运维与 Demo。
+
 ---
 
 ## 1. 概述
@@ -18,16 +20,230 @@
 | `CmsService` | CMS/PKCS#7 解析、封装、验签 |
 | `ScepService` | SCEP PKIO 解析与 CertRep 构建（RFC 8894） |
 
-### 1.2 典型调用流程
+### 1.2 架构与职责边界
 
-```
-① ImportKey(PEM/DER 私钥) → key_id
-② Sign(key_id, data, hash_algorithm) → signature
-   或 BuildCMS(content, sign_key_id) → cms_der
-③ 业务侧仅持久化 key_id，不再重复传输密钥材料
+业务进程（Go/Java 等）持有 PEM/DER 密钥材料，**仅在启动或轮换时**通过 gRPC 导入；日常密码运算只传 `key_id` 与小包数据。
+
+```mermaid
+flowchart LR
+  subgraph Biz["业务进程"]
+    App[应用逻辑]
+    SDK[SDK 连接池]
+  end
+  subgraph Offload["CryptoOffload 服务"]
+    KS[KeyService]
+    SS[SignService]
+    CS[CmsService]
+    SC[ScepService]
+    Mem[(内存 KeyStore)]
+  end
+  App --> SDK
+  SDK -->|gRPC| KS
+  SDK --> SS
+  SDK --> CS
+  SDK --> SC
+  KS --> Mem
+  SS --> Mem
+  CS --> Mem
+  SC --> Mem
 ```
 
-### 1.3 密钥存储模型（重要）
+| 职责 | 业务侧 | Offload 侧 |
+|------|--------|------------|
+| 密钥持久化、轮换策略 | ✓ | 仅进程内内存缓存 |
+| 小包签名/验签 | 调 RPC | OpenSSL 运算 |
+| CMS 构建/解析/验签 | 调 RPC | OpenSSL 运算 |
+| SCEP PKIO 解析、CertRep 构建 | 调 RPC；RA 签发证书 | PKCS#7 + 3DES Envelop |
+| 大包/流式数据 | 自行分片或哈希后传入 | 单字段 ≤ 1 MiB |
+
+### 1.3 集成流程一览
+
+#### 1.3.1 签名 / 验签（SignService）
+
+```mermaid
+sequenceDiagram
+  participant App as 业务应用
+  participant SDK as SDK
+  participant KS as KeyService
+  participant SS as SignService
+
+  App->>SDK: ImportKey(私钥 PEM/DER [+ 证书])
+  SDK->>KS: ImportKey
+  KS-->>SDK: key_id (私钥)
+  App->>SDK: ImportKey(公钥或证书) [可选]
+  SDK->>KS: ImportKey
+  KS-->>SDK: key_id (公钥)
+
+  loop 每次签名
+    App->>SDK: Sign(key_id, data, hash, sign_alg)
+    SDK->>SS: Sign
+    SS-->>SDK: signature
+  end
+
+  loop 每次验签
+    App->>SDK: Verify(pub_key_id, data, signature, ...)
+    SDK->>SS: Verify
+    SS-->>SDK: valid
+  end
+```
+
+**持久化建议**：业务库只存 `key_id` + `label`，不存 PEM；服务重启后按 label 重新 ImportKey。
+
+#### 1.3.2 CMS 签名与验签（CmsService）
+
+```mermaid
+sequenceDiagram
+  participant App as 业务应用
+  participant SDK as SDK
+  participant KS as KeyService
+  participant CS as CmsService
+
+  App->>SDK: ImportKey(私钥 + certificate_data)
+  Note over SDK,KS: CMS Build 需要证书出现在 SignedData
+  KS-->>SDK: sign_key_id
+
+  App->>SDK: BuildCMS(content, sign_key_id)
+  SDK->>CS: Build
+  CS-->>SDK: cms_der
+
+  App->>SDK: ImportKey(验签公钥/证书) [若尚未导入]
+  App->>SDK: VerifyCMS(cms_der, verify_key_id [, content])
+  SDK->>CS: Verify
+  CS-->>SDK: valid
+```
+
+| 场景 | `detached` | `VerifyCMS.content` |
+|------|------------|---------------------|
+| Attached（内容在 CMS 内） | `false` | 可空 |
+| Detached（内容与签名分离） | `true` | 必须传原始 `content` |
+
+#### 1.3.3 SCEP 证书签发（ScepService）
+
+典型 RA/CA 场景：终端发来 **PKIO**（外层 SignedData + 内层 EnvelopedData），业务解密 CSR、签发证书后返回 **CertRep**。
+
+```mermaid
+flowchart TB
+  subgraph In["入站 PKIO"]
+    PKIO[scep_der]
+  end
+  subgraph OffloadParse["① ParseRequest"]
+    P1[验外层 SignedData]
+    P2[提取 wrapper_cert_der]
+    P3[CA 私钥解密 EnvelopedData]
+    CSR[csr_der]
+  end
+  subgraph Biz["② 业务 / RA"]
+    RA[校验 CSR、策略审批]
+    ISSUE[签发终端证书 issued_cert_der]
+  end
+  subgraph OffloadRep["③ BuildCertRep"]
+    SUC[BuildSuccessCertRep]
+    FAIL[BuildFailureCertRep]
+    REP[certrep_der]
+  end
+
+  PKIO --> P1 --> P2 --> P3 --> CSR
+  CSR --> RA --> ISSUE
+  ISSUE -->|批准| SUC --> REP
+  RA -->|拒绝| FAIL --> REP
+```
+
+```mermaid
+sequenceDiagram
+  participant EP as 终端/网关
+  participant App as RA 业务
+  participant SDK as SDK
+  participant SC as ScepService
+
+  Note over App,SDK: 启动时 ImportKey(CA 私钥 + CA 证书 DER/PEM)
+  App->>SDK: ca_key_id 已就绪
+
+  EP->>App: POST PKIO (scep_der)
+  App->>SDK: ParseRequest(scep_der, ca_key_id)
+  SDK->>SC: ParseRequest
+  SC-->>SDK: csr_der, wrapper_cert_der
+
+  App->>App: 校验 CSR、签发或拒绝
+
+  alt 签发成功
+    App->>SDK: BuildSuccessCertRep(ca_key_id, transaction_id,<br/>recipient_nonce=请求 senderNonce,<br/>issued_cert_der, wrapper_cert_der)
+    SDK->>SC: BuildSuccessCertRep
+  else 签发失败
+    App->>SDK: BuildFailureCertRep(ca_key_id, transaction_id,<br/>recipient_nonce, fail_info, fail_info_text)
+    SDK->>SC: BuildFailureCertRep
+  end
+  SC-->>SDK: certrep_der
+  App->>EP: HTTP 200 + certrep_der
+```
+
+**Nonce 对应关系（RFC 8894）**
+
+| 请求字段 | 写入 CertRep | 说明 |
+|----------|--------------|------|
+| `transactionID` | 同值回写 | 必须与请求一致 |
+| `senderNonce`（请求） | `recipientNonce`（响应） | 填 `Build*CertRep.recipient_nonce` |
+| — | `senderNonce`（响应） | `sender_nonce` 空则服务端生成 16 字节随机数 |
+
+**SUCCESS vs FAILURE 结构差异**
+
+```mermaid
+flowchart LR
+  subgraph Success["BuildSuccessCertRep"]
+    S1[SignedData 签名]
+    S2[pkiStatus = 0]
+    S3[EnvelopedData 3DES<br/>包裹 issued_cert]
+  end
+  subgraph Failure["BuildFailureCertRep"]
+    F1[SignedData 签名]
+    F2[pkiStatus = 2]
+    F3[无 EnvelopedData]
+  end
+```
+
+> **wrapper_cert_der 必填（SUCCESS）**：EnvelopedData 的接收方证书；即使 wrapper 为 Ed25519，加密仍按 SCEP 惯例使用 CA RSA 公钥。
+
+#### 1.3.4 密钥生命周期
+
+```mermaid
+stateDiagram-v2
+  [*] --> Imported: ImportKey
+  Imported --> Active: PERMANENT
+  Imported --> OneShot: TEMPORARY
+  Active --> Active: Sign / Verify / CMS / SCEP
+  OneShot --> Consumed: 首次密码运算
+  Consumed --> [*]: 自动 DeleteKey
+  Active --> [*]: DeleteKey 或进程退出
+```
+
+### 1.4 算法与参数速查
+
+| 密钥类型 | 推荐 `sign_algorithm` | `hash_algorithm` | 备注 |
+|----------|----------------------|------------------|------|
+| RSA | `SIGN_RSA_PKCS1_V15` 或 `SIGN_RSA_PSS` | `HASH_SHA256` 等 | PSS 时 hash 参与 MGF |
+| EC (P-256 等) | `SIGN_ECDSA`（可省略，自动推断） | `HASH_SHA256` 等 | |
+| SM2 | `SIGN_SM2` | `HASH_SM3`（可省略，默认 SM3） | 需 OpenSSL 国密支持 |
+| Ed25519 | `SIGN_ED25519` | **`HASH_ALGORITHM_UNSPECIFIED`（0）** | 禁止传 SHA 系列 |
+
+`sign_algorithm` / `hash_algorithm` 传 `UNSPECIFIED` 时，服务端按密钥类型推断（见 §2.5）。
+
+### 1.5 SDK 方法对照
+
+| gRPC RPC | Go | Python | Rust | Java |
+|----------|-----|--------|------|------|
+| `KeyService.ImportKey` | `ImportKey` | `import_key` | `import_key` | `importKey` |
+| `KeyService.DeleteKey` | `DeleteKey` | `delete_key` | `delete_key` | `deleteKey` |
+| `SignService.Sign` | `Sign` | `sign` | `sign` | `sign` |
+| `SignService.Verify` | `Verify` | `verify` | `verify` | `verify` |
+| `CmsService.Build` | `BuildCMS` | `build_cms` | `build_cms` | `buildCms` |
+| `CmsService.Parse` | `ParseCMS` | `parse_cms` | `parse_cms` | `parseCms` |
+| `CmsService.Verify` | `VerifyCMS` | `verify_cms` | `verify_cms` | `verifyCms` |
+| `ScepService.ParseRequest` | `ParseScepRequest` | `parse_scep_request` | `parse_scep_request` | `parseScepRequest` |
+| `ScepService.BuildSuccessCertRep` | `BuildScepSuccessCertRep` | `build_scep_success_cert_rep` | `build_scep_success_cert_rep` | `buildScepSuccessCertRep` |
+| `ScepService.BuildFailureCertRep` | `BuildScepFailureCertRep` | `build_scep_failure_cert_rep` | `build_scep_failure_cert_rep` | `buildScepFailureCertRep` |
+
+连接池：Go `client.New` / Python `CryptoOffloadClient` / Rust `Client::connect` / Java `CryptoOffloadClient.connect`。
+
+### 1.6 密钥存储模型（重要）
 
 **ImportKey 时服务端会一次性完成解析并缓存在内存中**，后续 Sign/Verify/CMS 只通过 `key_id` 取用已解析的 OpenSSL 对象：
 
@@ -188,7 +404,7 @@
 
 ### 4.1 Sign
 
-对 `data` 做摘要并签名。
+对 `data` 签名。RSA/EC/SM2 会先按 `hash_algorithm` 做摘要再签；**Ed25519 对原始 `data` 做 EdDSA，忽略 hash 字段**。
 
 **请求 `SignRequest`**
 
@@ -196,7 +412,7 @@
 |------|------|------|------|
 | `key_id` | string | 是 | 私钥 key_id |
 | `data` | bytes | 是 | 待签数据（小包，≤1MiB） |
-| `hash_algorithm` | HashAlgorithm | 是 | 摘要算法 |
+| `hash_algorithm` | HashAlgorithm | 条件 | RSA/EC/SM2 **必填**；Ed25519 须为 `UNSPECIFIED` |
 | `sign_algorithm` | SignAlgorithm | 否 | 默认推断 |
 
 **响应 `SignResponse`**
@@ -218,14 +434,45 @@
 | `key_id` | string | 是 | 公钥或证书 key_id |
 | `data` | bytes | 是 | 原始数据 |
 | `signature` | bytes | 是 | 签名值 |
-| `hash_algorithm` | HashAlgorithm | 是 | 与签名时一致 |
-| `sign_algorithm` | SignAlgorithm | 否 | 与签名时一致 |
+| `hash_algorithm` | HashAlgorithm | 条件 | 与 Sign 时一致；Ed25519 为 `UNSPECIFIED` |
+| `sign_algorithm` | SignAlgorithm | 否 | 与 Sign 时一致 |
 
 **响应 `VerifyResponse`**
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `valid` | bool | 验签是否通过 |
+
+**Rust 示例（RSA PKCS#1）**
+
+```rust
+let imported = client.import_key(ImportKeyRequest {
+    kind: KeyKind::Private as i32,
+    lifetime: KeyLifetime::Permanent as i32,
+    format: KeyFormat::Pem as i32,
+    key_data: priv_pem,
+    ..Default::default()
+}).await?;
+let key_id = imported.metadata.unwrap().key_id;
+
+let sign_resp = client.sign(SignRequest {
+    key_id,
+    data: payload.to_vec(),
+    hash_algorithm: HashAlgorithm::HashSha256 as i32,
+    sign_algorithm: SignAlgorithm::SignRsaPkcs1V15 as i32,
+}).await?;
+```
+
+**Rust 示例（Ed25519）**
+
+```rust
+let sign_resp = client.sign(SignRequest {
+    key_id,
+    data: payload.to_vec(),
+    hash_algorithm: HashAlgorithm::Unspecified as i32,
+    sign_algorithm: SignAlgorithm::SignEd25519 as i32,
+}).await?;
+```
 
 ---
 
@@ -291,11 +538,35 @@
 |------|------|------|
 | `valid` | bool | 验签结果 |
 
+**Rust 示例（Attached CMS）**
+
+```rust
+let cms = client.build_cms(BuildCmsRequest {
+    content: payload.to_vec(),
+    sign_key_id: priv_key_id.clone(),
+    detached: false,
+    ..Default::default()
+}).await?;
+
+let ok = client.verify_cms(VerifyCmsRequest {
+    cms_der: cms.cms_der,
+    verify_key_id: pub_key_id,
+    ..Default::default()
+}).await?;
+assert!(ok.valid);
+```
+
 ---
 
 ## 6. ScepService
 
-SCEP offload 与 `CmsService` 同级，面向 RFC 8894 PKIO/CertRep 路径。CA 私钥通过 `ca_key_id` 引用，ImportKey 时需附带 CA 证书。
+SCEP offload 与 `CmsService` 同级，面向 RFC 8894 PKIO/CertRep 路径。完整时序见 **§1.3.3**。
+
+**前置条件**
+
+1. 启动服务前加载 legacy provider（服务端已内置），以支持 3DES EnvelopedData。
+2. `ImportKey` CA 私钥时**必须**附带 `certificate_data`（CA 证书 DER/PEM），得到 `ca_key_id`。
+3. 从 PKIO 解析出的 `transaction_id`、`senderNonce` 由业务从 HTTP/SCEP 属性提取（本服务不解析 HTTP 层）。
 
 ### 6.1 ParseRequest
 
@@ -351,17 +622,76 @@ SCEP offload 与 `CmsService` 同级，面向 RFC 8894 PKIO/CertRep 路径。CA 
 | `fail_info` | uint32 | 是 | 0..=4（RFC 8894 Table 5） |
 | `fail_info_text` | string | 是 | UTF-8 失败说明 |
 
+**fail_info 取值（RFC 8894 Table 5）**
+
+| 值 | 含义 | 典型场景 |
+|----|------|----------|
+| 0 | badAlg | 不支持的算法 |
+| 1 | badMessageCheck | 完整性/签名校验失败 |
+| 2 | badRequest | CSR 格式或字段非法 |
+| 3 | badTime | 不在有效 enrol 窗口 |
+| 4 | badCertId | 未知或吊销的证书 ID |
+
 **响应 `BuildScepCertRepResponse`**
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `certrep_der` | bytes | CertRep PKCS#7 DER |
 
+**Go 示例（SUCCESS CertRep）**
+
+```go
+caImported, _ := cli.ImportKey(ctx, &pb.ImportKeyRequest{
+    Kind: pb.KeyKind_KEY_KIND_PRIVATE, Lifetime: pb.KeyLifetime_KEY_LIFETIME_PERMANENT,
+    Format: pb.KeyFormat_KEY_FORMAT_PEM, KeyData: caPrivPEM,
+    CertificateData: caCertDER, CertificateFormat: pb.KeyFormat_KEY_FORMAT_DER,
+    Label: "scep-ca",
+})
+caKeyID := caImported.GetMetadata().GetKeyId()
+
+parsed, _ := cli.ParseScepRequest(ctx, &pb.ParseScepRequestRequest{
+    ScepDer: pkioDER, CaKeyId: caKeyID,
+})
+// 业务：校验 parsed.CsrDer，签发 issuedCertDER ...
+
+rep, _ := cli.BuildScepSuccessCertRep(ctx, &pb.BuildScepSuccessCertRepRequest{
+    CaKeyId: caKeyID, TransactionId: txnID,
+    RecipientNonce: reqSenderNonce,
+    IssuedCertDer: issuedCertDER,
+    WrapperCertDer: parsed.WrapperCertDer,
+})
+// HTTP 响应体：rep.CertrepDer
+```
+
+**Go 示例（FAILURE CertRep）**
+
+```go
+rep, _ := cli.BuildScepFailureCertRep(ctx, &pb.BuildScepFailureCertRepRequest{
+    CaKeyId: caKeyID, TransactionId: txnID,
+    RecipientNonce: reqSenderNonce,
+    FailInfo: 2, FailInfoText: "invalid CSR subject",
+})
+```
+
 > 服务端启动时会注册 VeriSign SCEP 专有 OID 并加载 OpenSSL legacy provider（3DES 解密）。
 
 ---
 
-## 7. gRPC 错误码
+## 7. 快速排错清单
+
+| 现象 | 可能原因 | 处理 |
+|------|----------|------|
+| `parse certificate DER` | `certificate_data` 是 PEM 却标成 DER | 改 `certificate_format` 或转 DER |
+| `hash algorithm is required` | Ed25519 误传了 SHA | `hash_algorithm` 设为 `UNSPECIFIED` |
+| `operation requires a private key` | `key_id` 指向公钥 | 换私钥 `key_id` |
+| `temporary key already consumed` | 临时钥已用过 | 重新 ImportKey |
+| `key not found` | 服务重启或未导入 | 重新 ImportKey |
+| SCEP Parse 失败 | CA 钥与加密算法不匹配、legacy 未加载 | 检查 CA 导入与 OpenSSL 3.x legacy |
+| CMS Verify 失败 | detached 未传 `content` | 补 `content` 或检查 `detached` |
+
+---
+
+## 8. gRPC 错误码
 
 业务错误以 `INVALID_ARGUMENT` 返回，message 为可读字符串，例如：
 
@@ -377,7 +707,7 @@ SCEP offload 与 `CmsService` 同级，面向 RFC 8894 PKIO/CertRep 路径。CA 
 
 ---
 
-## 8. 连接池建议（客户端）
+## 9. 连接池建议（客户端）
 
 | 业务 QPS | 建议 MaxOpen | 说明 |
 |----------|--------------|------|
@@ -389,7 +719,7 @@ SCEP offload 与 `CmsService` 同级，面向 RFC 8894 PKIO/CertRep 路径。CA 
 
 ---
 
-## 9. Proto 源文件
+## 10. Proto 源文件
 
 ```
 proto/cryptooffload/v1/
@@ -409,11 +739,13 @@ cargo build  # Rust（tonic-build 自动生成）
 
 ---
 
-## 10. 各语言 Demo 入口
+## 11. 各语言 Demo 入口
 
-| 语言 | 路径 |
-|------|------|
-| Go | [examples/go/demo/main.go](../examples/go/demo/main.go) |
-| Python | [examples/python/demo.py](../examples/python/demo.py) |
-| Rust | [examples/rust/demo.rs](../examples/rust/demo.rs) |
-| Java | [examples/java/Demo.java](../examples/java/Demo.java) |
+| 语言 | 路径 | 覆盖能力 |
+|------|------|----------|
+| Go | [examples/go/demo/main.go](../examples/go/demo/main.go) | ImportKey、Sign、Verify、CMS |
+| Python | [examples/python/demo.py](../examples/python/demo.py) | 同上 |
+| Rust | [examples/rust/demo.rs](../examples/rust/demo.rs) | 同上 |
+| Java | [examples/java/Demo.java](../examples/java/Demo.java) | 同上 |
+
+SCEP / SM2 / Ed25519 的字段与调用顺序以本文 **§1.3、§1.4、§6** 及 `server/tests/integration_test.rs` 为准；后续可在 `examples/` 增加 SCEP 专项 Demo。

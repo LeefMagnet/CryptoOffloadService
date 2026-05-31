@@ -127,6 +127,7 @@ python scripts/benchmark/bench_python.py --mode sign --clients 8
 | `scep-parse-request` | SCEP PKIO 解析：验签外层 + 解密 → `csr_der` + `wrapper_cert_der` | CA 私钥 + 启动时生成 PKIO fixture |
 | `scep-certrep-success` | SUCCESS CertRep 构建 | CA + issued + wrapper |
 | `scep-certrep-failure` | FAILURE CertRep 构建 | CA |
+| `scep-certrep-pending` | PENDING CertRep 构建（pkiStatus=3） | CA |
 | `scep-certrep-verify` | SUCCESS CertRep CMS 验签 | 预构建 CertRep + CA 证书 |
 | `scep-parse-build-success` | ParseRequest → BuildSuccessCertRep 往返 | 同上 |
 

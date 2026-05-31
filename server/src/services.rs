@@ -426,6 +426,44 @@ impl ScepService for ScepServiceImpl {
 
         Ok(Response::new(BuildScepCertRepResponse { certrep_der }))
     }
+
+    async fn build_pending_cert_rep(
+        &self,
+        request: Request<BuildScepPendingCertRepRequest>,
+    ) -> Result<Response<BuildScepCertRepResponse>, Status> {
+        let req = request.into_inner();
+        for blob in [&req.recipient_nonce, &req.sender_nonce] {
+            if blob.len() > MAX_SMALL_PACKET {
+                return Err(Status::invalid_argument("SCEP request field too large"));
+            }
+        }
+        if req.transaction_id.is_empty() {
+            return Err(Status::invalid_argument("transaction_id is required"));
+        }
+        if req.recipient_nonce.is_empty() {
+            return Err(Status::invalid_argument("recipient_nonce is required"));
+        }
+        let access = self
+            .state
+            .keys
+            .access_key(&req.ca_key_id)
+            .map_err(map_key_store_err)?;
+        let transaction_id = req.transaction_id;
+        let recipient_nonce = req.recipient_nonce;
+        let sender_nonce = req.sender_nonce;
+        let state = self.state.clone();
+        let certrep_der = run_crypto(&state, move || {
+            crypto_scep::build_pending_certrep(
+                access,
+                &transaction_id,
+                &recipient_nonce,
+                &sender_nonce,
+            )
+        })
+        .await?;
+
+        Ok(Response::new(BuildScepCertRepResponse { certrep_der }))
+    }
 }
 
 fn map_key_store_err(err: anyhow::Error) -> Status {

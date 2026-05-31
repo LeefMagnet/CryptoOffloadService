@@ -175,6 +175,20 @@ impl Client {
         .await
     }
 
+    pub async fn build_scep_pending_cert_rep(
+        &self,
+        req: BuildScepPendingCertRepRequest,
+    ) -> Result<BuildScepCertRepResponse> {
+        self.with_scep(|mut client| async move {
+            client
+                .build_pending_cert_rep(req)
+                .await
+                .map(|r| r.into_inner())
+                .context("BuildScepPendingCertRep rpc")
+        })
+        .await
+    }
+
     async fn with_key<F, Fut, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce(KeyServiceClient<tonic::transport::Channel>) -> Fut,

@@ -62,7 +62,7 @@ run_mode() {
     sign-sm2 sign-verify-sm2
     sign-ed25519 sign-verify-ed25519
     cms-build cms-parse cms-verify cms-build-parse
-    scep-certrep-success scep-certrep-failure
+    scep-certrep-success scep-certrep-failure scep-certrep-pending
     scep-parse-request scep-certrep-verify scep-parse-build-success
     import-key
   )

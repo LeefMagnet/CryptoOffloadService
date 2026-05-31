@@ -16,6 +16,8 @@ service ScepService {
   rpc BuildSuccessCertRep(BuildScepSuccessCertRepRequest) returns (BuildScepCertRepResponse);
   // 构建 FAILURE CertRep（pkiStatus=2，无 envelop）。
   rpc BuildFailureCertRep(BuildScepFailureCertRepRequest) returns (BuildScepCertRepResponse);
+  // 构建 PENDING CertRep（pkiStatus=3，待人工审批，无 envelop / failInfo）。
+  rpc BuildPendingCertRep(BuildScepPendingCertRepRequest) returns (BuildScepCertRepResponse);
 }
 
 message ParseScepRequestRequest {
@@ -48,6 +50,15 @@ message BuildScepFailureCertRepRequest {
   // RFC 8894 failInfo：0=badAlg, 1=badMessageCheck, 2=badRequest, 3=badTime, 4=badCertId
   uint32 fail_info = 5;
   string fail_info_text = 6;
+}
+
+message BuildScepPendingCertRepRequest {
+  string ca_key_id = 1;
+  string transaction_id = 2;
+  // 请求 senderNonce → 响应 recipientNonce
+  bytes recipient_nonce = 3;
+  // 响应 senderNonce；空则服务端自动生成 16 字节
+  bytes sender_nonce = 4;
 }
 
 message BuildScepCertRepResponse {

@@ -68,7 +68,7 @@ flowchart TB
 | **KeyService** | ImportKey / DeleteKey / GetKeyInfo / ListKeys | 类 KMS 的 `key_id` 管理；永久/临时密钥 |
 | **SignService** | Sign / Verify | 通用数据签名；RSA / ECDSA / SM2 / Ed25519 |
 | **CmsService** | Parse / Build / Verify | PKCS#7 解析、封装、验签 |
-| **ScepService** | ParseRequest / BuildSuccessCertRep / BuildFailureCertRep | RFC 8894 PKIO → CSR；SUCCESS/FAILURE CertRep |
+| **ScepService** | ParseRequest / BuildSuccessCertRep / BuildFailureCertRep / **BuildPendingCertRep** | RFC 8894 PKIO → CSR；SUCCESS / FAILURE / **PENDING** CertRep |
 
 ### 4.1 算法支持
 
@@ -93,7 +93,8 @@ flowchart LR
 
 - **ParseRequest**：外层 SignedData 验签 + 内层 Envelop 解密 → `csr_der`、`wrapper_cert_der`
 - **BuildSuccessCertRep**：pkiStatus=0，含 3DES Envelop 包裹的签发证书
-- **BuildFailureCertRep**：pkiStatus=2，无 Envelop，仅签名 PKCS#7
+- **BuildFailureCertRep**：pkiStatus=2，无 Envelop，含 failInfo + failInfoText
+- **BuildPendingCertRep**：pkiStatus=3，无 Envelop / failInfo，待人工审批
 - **业务侧保留**：CSR 策略、审批、证书模板、HTTP/SCEP 协议层
 
 详细时序图见 [API.md §1.3.3](./API.md#133-scep-证书签发scepservice)。

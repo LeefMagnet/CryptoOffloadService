@@ -5,7 +5,8 @@ use crypto_offload_server::cryptooffload::v1::key_service_client::KeyServiceClie
 use crypto_offload_server::cryptooffload::v1::scep_service_client::ScepServiceClient;
 use crypto_offload_server::cryptooffload::v1::sign_service_client::SignServiceClient;
 use crypto_offload_server::cryptooffload::v1::{
-    BuildCmsRequest, BuildScepFailureCertRepRequest, BuildScepSuccessCertRepRequest,
+    BuildCmsRequest, BuildScepFailureCertRepRequest, BuildScepPendingCertRepRequest,
+    BuildScepSuccessCertRepRequest,
     GetKeyInfoRequest, HashAlgorithm, ImportKeyRequest, KeyFormat, KeyKind, KeyLifetime,
     ListKeysRequest, ParseScepRequestRequest, SignAlgorithm, SignRequest, VerifyCmsRequest,
     VerifyRequest,
@@ -257,6 +258,48 @@ async fn grpc_scep_failure_certrep() {
         })
         .await
         .expect("build failure certrep")
+        .into_inner();
+    assert!(!resp.certrep_der.is_empty());
+}
+
+#[tokio::test]
+async fn grpc_scep_pending_certrep() {
+    let url = start_test_server().await;
+    let channel = tonic::transport::Channel::from_shared(url)
+        .unwrap()
+        .connect()
+        .await
+        .expect("connect");
+
+    let (ca_pem, ca_der) = generate_rsa2048_der_cert().expect("ca");
+    let mut key_client = KeyServiceClient::new(channel.clone());
+    let mut scep_client = ScepServiceClient::new(channel);
+
+    let ca = key_client
+        .import_key(ImportKeyRequest {
+            kind: KeyKind::Private as i32,
+            lifetime: KeyLifetime::Permanent as i32,
+            format: KeyFormat::Pem as i32,
+            key_data: ca_pem,
+            label: "scep-ca-pending".into(),
+            certificate_data: ca_der,
+            certificate_format: KeyFormat::Der as i32,
+            ..Default::default()
+        })
+        .await
+        .expect("import ca")
+        .into_inner();
+    let ca_id = ca.metadata.expect("metadata").key_id;
+
+    let resp = scep_client
+        .build_pending_cert_rep(BuildScepPendingCertRepRequest {
+            ca_key_id: ca_id,
+            transaction_id: "integration-pending-tx".into(),
+            recipient_nonce: vec![9, 8, 7, 6],
+            ..Default::default()
+        })
+        .await
+        .expect("build pending certrep")
         .into_inner();
     assert!(!resp.certrep_der.is_empty());
 }

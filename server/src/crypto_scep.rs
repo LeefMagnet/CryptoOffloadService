@@ -9,8 +9,9 @@ use openssl::x509::X509;
 use crate::key_store::{ca_private_with_cert, KeyAccess};
 use crate::scep_certrep::{
     build_failure_certrep as build_failure_certrep_der,
+    build_pending_certrep as build_pending_certrep_der,
     build_success_certrep as build_success_certrep_der,
-    ScepFailureParams, ScepSuccessParams,
+    ScepFailureParams, ScepPendingParams, ScepSuccessParams,
 };
 
 pub fn parse_request(scep_der: &[u8], access: KeyAccess) -> Result<(Vec<u8>, Vec<u8>)> {
@@ -92,6 +93,29 @@ pub fn build_failure_certrep(
             sender_nonce,
             fail_info,
             fail_info_text,
+        },
+    )
+}
+
+pub fn build_pending_certrep(
+    access: KeyAccess,
+    transaction_id: &str,
+    recipient_nonce: &[u8],
+    sender_nonce: &[u8],
+) -> Result<Vec<u8>> {
+    crate::openssl_init::init();
+    let material = match &access {
+        KeyAccess::Permanent(m) | KeyAccess::Temporary(m) => m,
+    };
+    let (ca_key, ca_cert) = ca_private_with_cert(material)?;
+
+    build_pending_certrep_der(
+        &ca_cert,
+        &ca_key,
+        ScepPendingParams {
+            transaction_id,
+            recipient_nonce,
+            sender_nonce,
         },
     )
 }

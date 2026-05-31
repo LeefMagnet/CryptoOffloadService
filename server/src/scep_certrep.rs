@@ -1,4 +1,4 @@
-//! RFC 8894 CertRep：FAILURE（pkiStatus=2）与 SUCCESS（pkiStatus=0，带 pkcsPKIEnvelope）。
+//! RFC 8894 CertRep：SUCCESS（pkiStatus=0）、FAILURE（pkiStatus=2）、PENDING（pkiStatus=3）。
 
 use anyhow::{anyhow, Context, Result};
 use foreign_types::{ForeignType, ForeignTypeRef};
@@ -30,6 +30,7 @@ const OID_FAIL_INFO_TEXT: &str = "1.3.6.1.5.5.7.24.1";
 const MSG_TYPE_CERT_REP: &str = "3";
 const PKI_STATUS_SUCCESS: &str = "0";
 const PKI_STATUS_FAILURE: &str = "2";
+const PKI_STATUS_PENDING: &str = "3";
 
 /// SUCCESS CertRep 参数（与 Go `BuildSuccessRep` / smallstep `ParsePKIMessage` 对齐）
 #[derive(Clone, Copy)]
@@ -43,6 +44,16 @@ pub struct ScepSuccessParams<'a> {
     pub wrapper_cert: &'a X509Ref,
     /// SCEP CA（RSA），与 Go `rsaEncryptRecipients` 一致：Ed25519 wrapper 时加密给 CA
     pub ca_cert: &'a X509Ref,
+}
+
+/// PENDING CertRep 参数（pkiStatus=3，无 failInfo / EnvelopedData）
+#[derive(Debug, Clone, Copy)]
+pub struct ScepPendingParams<'a> {
+    pub transaction_id: &'a str,
+    /// 请求中的 senderNonce，写入响应的 recipientNonce
+    pub recipient_nonce: &'a [u8],
+    /// 响应 senderNonce；为空则自动生成 16 字节
+    pub sender_nonce: &'a [u8],
 }
 
 /// failInfo 取值见 RFC 8894 Table 5（0..=4）
@@ -247,6 +258,66 @@ pub fn build_failure_certrep(
         pkcs7_finalize_content(p7.as_ptr(), None).context("finalize failure CertRep")?;
 
         p7.to_der().context("encode failure CertRep DER")
+    }
+}
+
+pub fn build_pending_certrep(
+    ca_cert: &X509Ref,
+    ca_key: &PKeyRef<Private>,
+    params: ScepPendingParams<'_>,
+) -> Result<Vec<u8>> {
+    if params.transaction_id.is_empty() {
+        return Err(anyhow!("transaction_id must not be empty"));
+    }
+    if params.recipient_nonce.is_empty() {
+        return Err(anyhow!("recipient_nonce must not be empty"));
+    }
+
+    let mut sender_nonce_buf = [0u8; 16];
+    let sender_nonce = if params.sender_nonce.is_empty() {
+        rand_bytes(&mut sender_nonce_buf).context("failed to generate sender nonce")?;
+        sender_nonce_buf.as_slice()
+    } else {
+        params.sender_nonce
+    };
+
+    unsafe {
+        ffi::init();
+
+        let p7 = cvt_p(ffi::PKCS7_new()).context("PKCS7_new")?;
+        let p7 = Pkcs7::from_ptr(p7);
+
+        cvt(ffi::PKCS7_set_type(
+            p7.as_ptr(),
+            Nid::PKCS7_SIGNED.as_raw(),
+        ))
+        .context("PKCS7_set_type")?;
+
+        cvt(ffi::PKCS7_add_certificate(p7.as_ptr(), ca_cert.as_ptr()))
+            .context("PKCS7_add_certificate")?;
+
+        let si = ffi::PKCS7_add_signature(
+            p7.as_ptr(),
+            ca_cert.as_ptr(),
+            ca_key.as_ptr(),
+            MessageDigest::sha256().as_ptr(),
+        );
+        if si.is_null() {
+            return Err(anyhow!("PKCS7_add_signature returned null"));
+        }
+
+        add_printable_attr(si, OID_MESSAGE_TYPE, MSG_TYPE_CERT_REP)?;
+        add_printable_attr(si, OID_PKI_STATUS, PKI_STATUS_PENDING)?;
+        add_printable_attr(si, OID_TRANSACTION_ID, params.transaction_id)?;
+        add_octet_attr(si, OID_SENDER_NONCE, sender_nonce)?;
+        add_octet_attr(si, OID_RECIPIENT_NONCE, params.recipient_nonce)?;
+
+        cvt(ffi::PKCS7_content_new(p7.as_ptr(), Nid::PKCS7_DATA.as_raw()))
+            .context("PKCS7_content_new")?;
+
+        pkcs7_finalize_content(p7.as_ptr(), None).context("finalize pending CertRep")?;
+
+        p7.to_der().context("encode pending CertRep DER")
     }
 }
 

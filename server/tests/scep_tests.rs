@@ -89,6 +89,24 @@ fn scep_parse_then_build_success_3des_roundtrip() {
 }
 
 #[test]
+fn scep_build_pending_certrep() {
+    init_scep_test_openssl();
+
+    let store = KeyStore::new();
+    let (ca_id, _ca_der) = import_ca(&store, "scep-ca-pending");
+
+    let access = store.access_key(&ca_id).expect("access");
+    let certrep = crypto_scep::build_pending_certrep(
+        access,
+        "tx-pending-789",
+        &[5u8, 6, 7, 8],
+        &[],
+    )
+    .expect("build pending certrep");
+    assert!(!certrep.is_empty());
+}
+
+#[test]
 fn scep_build_failure_certrep() {
     init_scep_test_openssl();
 

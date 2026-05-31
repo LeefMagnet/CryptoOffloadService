@@ -226,3 +226,18 @@ func (c *Client) BuildScepFailureCertRep(ctx context.Context, req *pb.BuildScepF
 	})
 	return resp, err
 }
+
+// BuildScepPendingCertRep 构建 SCEP PENDING CertRep（pkiStatus=3）。
+func (c *Client) BuildScepPendingCertRep(ctx context.Context, req *pb.BuildScepPendingCertRepRequest) (*pb.BuildScepCertRepResponse, error) {
+	var resp *pb.BuildScepCertRepResponse
+	err := c.withConn(ctx, func(conn *pool.Conn) error {
+		cli := pb.NewScepServiceClient(conn.GRPC())
+		out, err := cli.BuildPendingCertRep(ctx, req)
+		if err != nil {
+			return err
+		}
+		resp = out
+		return nil
+	})
+	return resp, err
+}

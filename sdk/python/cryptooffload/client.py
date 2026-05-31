@@ -129,6 +129,13 @@ class Client:
             return stub.BuildFailureCertRep(req)
         return self._call(run)
 
+    def build_scep_pending_cert_rep(self, **kwargs):
+        req = scep_service_pb2.BuildScepPendingCertRepRequest(**kwargs)
+        def run(conn: Conn):
+            stub = scep_service_pb2_grpc.ScepServiceStub(conn.channel)
+            return stub.BuildPendingCertRep(req)
+        return self._call(run)
+
 
 # 便捷枚举导出
 KeyKind = common_pb2.KeyKind

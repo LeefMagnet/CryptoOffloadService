@@ -139,6 +139,7 @@ flowchart TB
   subgraph OffloadRep["③ BuildCertRep"]
     SUC[BuildSuccessCertRep]
     FAIL[BuildFailureCertRep]
+    PEND[BuildPendingCertRep]
     REP[certrep_der]
   end
 
@@ -146,6 +147,7 @@ flowchart TB
   CSR --> RA --> ISSUE
   ISSUE -->|批准| SUC --> REP
   RA -->|拒绝| FAIL --> REP
+  RA -->|待审| PEND --> REP
 ```
 
 ```mermaid
@@ -171,6 +173,9 @@ sequenceDiagram
   else 签发失败
     App->>SDK: BuildFailureCertRep(ca_key_id, transaction_id,<br/>recipient_nonce, fail_info, fail_info_text)
     SDK->>SC: BuildFailureCertRep
+  else 待人工审批
+    App->>SDK: BuildPendingCertRep(ca_key_id, transaction_id,<br/>recipient_nonce=请求 senderNonce)
+    SDK->>SC: BuildPendingCertRep
   end
   SC-->>SDK: certrep_der
   App->>EP: HTTP 200 + certrep_der
@@ -184,7 +189,7 @@ sequenceDiagram
 | `senderNonce`（请求） | `recipientNonce`（响应） | 填 `Build*CertRep.recipient_nonce` |
 | — | `senderNonce`（响应） | `sender_nonce` 空则服务端生成 16 字节随机数 |
 
-**SUCCESS vs FAILURE 结构差异**
+**SUCCESS / FAILURE / PENDING 结构差异**
 
 ```mermaid
 flowchart LR
@@ -196,7 +201,13 @@ flowchart LR
   subgraph Failure["BuildFailureCertRep"]
     F1[SignedData 签名]
     F2[pkiStatus = 2]
-    F3[无 EnvelopedData]
+    F3[failInfo + failInfoText]
+    F4[无 EnvelopedData]
+  end
+  subgraph Pending["BuildPendingCertRep"]
+    P1[SignedData 签名]
+    P2[pkiStatus = 3]
+    P3[无 failInfo / Envelop]
   end
 ```
 
@@ -240,6 +251,7 @@ stateDiagram-v2
 | `ScepService.ParseRequest` | `ParseScepRequest` | `parse_scep_request` | `parse_scep_request` | `parseScepRequest` |
 | `ScepService.BuildSuccessCertRep` | `BuildScepSuccessCertRep` | `build_scep_success_cert_rep` | `build_scep_success_cert_rep` | `buildScepSuccessCertRep` |
 | `ScepService.BuildFailureCertRep` | `BuildScepFailureCertRep` | `build_scep_failure_cert_rep` | `build_scep_failure_cert_rep` | `buildScepFailureCertRep` |
+| `ScepService.BuildPendingCertRep` | `BuildScepPendingCertRep` | `build_scep_pending_cert_rep` | `build_scep_pending_cert_rep` | `buildScepPendingCertRep` |
 
 连接池：Go `client.New` / Python `CryptoOffloadClient` / Rust `Client::connect` / Java `CryptoOffloadClient.connect`。
 
@@ -638,6 +650,25 @@ SCEP offload 与 `CmsService` 同级，面向 RFC 8894 PKIO/CertRep 路径。完
 |------|------|------|
 | `certrep_der` | bytes | CertRep PKCS#7 DER |
 
+### 6.4 BuildPendingCertRep
+
+构建 PENDING CertRep（**pkiStatus=3**，待人工审批；无 EnvelopedData、无 failInfo）。
+
+**请求 `BuildScepPendingCertRepRequest`**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `ca_key_id` | string | 是 | CA 私钥 key_id |
+| `transaction_id` | string | 是 | SCEP transactionID |
+| `recipient_nonce` | bytes | 是 | 请求 senderNonce |
+| `sender_nonce` | bytes | 否 | 空则自动生成 16 字节 |
+
+**响应 `BuildScepCertRepResponse`**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `certrep_der` | bytes | CertRep PKCS#7 DER |
+
 **Go 示例（SUCCESS CertRep）**
 
 ```go
@@ -670,6 +701,15 @@ rep, _ := cli.BuildScepFailureCertRep(ctx, &pb.BuildScepFailureCertRepRequest{
     CaKeyId: caKeyID, TransactionId: txnID,
     RecipientNonce: reqSenderNonce,
     FailInfo: 2, FailInfoText: "invalid CSR subject",
+})
+```
+
+**Go 示例（PENDING CertRep）**
+
+```go
+rep, _ := cli.BuildScepPendingCertRep(ctx, &pb.BuildScepPendingCertRepRequest{
+    CaKeyId: caKeyID, TransactionId: txnID,
+    RecipientNonce: reqSenderNonce,
 })
 ```
 

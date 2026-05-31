@@ -25,7 +25,8 @@ use cryptooffload::v1::key_service_client::KeyServiceClient;
 use cryptooffload::v1::scep_service_client::ScepServiceClient;
 use cryptooffload::v1::sign_service_client::SignServiceClient;
 use cryptooffload::v1::{
-    BuildCmsRequest, BuildScepFailureCertRepRequest, BuildScepSuccessCertRepRequest,
+    BuildCmsRequest, BuildScepFailureCertRepRequest, BuildScepPendingCertRepRequest,
+    BuildScepSuccessCertRepRequest,
     HashAlgorithm, ImportKeyRequest, KeyFormat, KeyKind, KeyLifetime, ParseCmsRequest,
     ParseScepRequestRequest, SignAlgorithm, SignRequest, VerifyCmsRequest, VerifyRequest,
 };
@@ -50,6 +51,8 @@ enum BenchMode {
     ScepCertrepSuccess,
     /// SCEP FAILURE CertRep（pkiStatus=2，无 Envelop）
     ScepCertrepFailure,
+    /// SCEP PENDING CertRep（pkiStatus=3，待人工审批，无 Envelop）
+    ScepCertrepPending,
     /// SCEP ParseRequest：验外层 SignedData + 解密 Envelop → csr_der + wrapper_cert_der
     ScepParseRequest,
     /// SCEP SUCCESS CertRep CMS 验签（CmsService.Verify + CA 证书）
@@ -705,6 +708,16 @@ async fn run_one(channel: &Channel, mode: BenchMode, keys: &BenchKeys) -> Result
                     recipient_nonce: keys.recipient_nonce.clone(),
                     fail_info: 2,
                     fail_info_text: "benchmark bad request".into(),
+                    ..Default::default()
+                })
+                .await?;
+        }
+        BenchMode::ScepCertrepPending => {
+            ScepServiceClient::new(channel.clone())
+                .build_pending_cert_rep(BuildScepPendingCertRepRequest {
+                    ca_key_id: keys.ca_key_id.clone(),
+                    transaction_id: "bench-tx-pending".into(),
+                    recipient_nonce: keys.recipient_nonce.clone(),
                     ..Default::default()
                 })
                 .await?;

@@ -8,21 +8,10 @@ option java_multiple_files = true;
 
 // 自定义 SCEP 扩展（与 scep_service.proto 配合）：
 // - scep_service：PKIO 解密 / CertRep 构建（RFC 8894 密码运算）
-// - scep_ext_service：SignedAttributes 解析、CertAliasOrCn、HTTP/MIME 辅助
+// - scep_ext_service：SignedAttributes 解析、CertAliasOrCn 编解码
 //
+// HTTP 层（?operation= / Content-Type）由业务 SCEP 网关处理，offload 只接收 ASN.1 DER。
 // 参考客户端：docs/reference/scep/
-
-// SCEP HTTP ?operation= 映射（iwall::Message::OperationType）
-enum ScepHttpOperation {
-  SCEP_HTTP_OPERATION_UNSPECIFIED = 0;
-  SCEP_HTTP_OPERATION_GET_CA = 1;
-  SCEP_HTTP_OPERATION_GET_CA_RA = 2;
-  SCEP_HTTP_OPERATION_ENROLL = 3;
-  SCEP_HTTP_OPERATION_GET_CERT = 5;
-  SCEP_HTTP_OPERATION_GET_CRL = 7;
-  SCEP_HTTP_OPERATION_GET_NEXT_CA = 15;
-  SCEP_HTTP_OPERATION_GET_CA_CAPS = 31;
-}
 
 // SCEP messageType 属性（VeriSign OID 2.16.840.1.113733.1.9.2）
 enum ScepMessageType {
@@ -81,6 +70,9 @@ service ScepExtService {
   // GetCert / GetCRL 类 PKIO：解密 EnvelopedData 并解析 CertAliasOrCn 内层
   rpc ParseGetCertPkio(ParseGetCertPkioRequest) returns (ParseGetCertPkioResponse);
 
+  // Enroll（PKCSReq）类 PKIO：解密 EnvelopedData 并解析 SignedAttributes + CSR（一次 RPC）
+  rpc ParseEnrollPkio(ParseEnrollPkioRequest) returns (ParseEnrollPkioResponse);
+
   // 编码 CertAliasOrCn 或 SerialNumber 内层 content（GetCert 请求体）
   rpc EncodeCertAliasContent(EncodeCertAliasContentRequest)
       returns (EncodeCertAliasContentResponse);
@@ -88,16 +80,6 @@ service ScepExtService {
   // 解码 CertAliasOrCn / SerialNumber DER
   rpc DecodeCertAliasContent(DecodeCertAliasContentRequest)
       returns (DecodeCertAliasContentResponse);
-
-  // 构建 SCEP HTTP query（/scep/pkiclient?operation=...&message=...）
-  rpc EncodeScepHttpQuery(EncodeScepHttpQueryRequest) returns (EncodeScepHttpQueryResponse);
-
-  // 校验 HTTP 响应 Content-Type 是否与 operation 匹配
-  rpc VerifyScepResponseMime(VerifyScepResponseMimeRequest)
-      returns (VerifyScepResponseMimeResponse);
-
-  // 查询 operation 对应的期望 Content-Type
-  rpc GetScepExpectedMime(GetScepExpectedMimeRequest) returns (GetScepExpectedMimeResponse);
 }
 
 message ParseScepSignedAttributesRequest {
@@ -122,6 +104,17 @@ message ParseGetCertPkioResponse {
   bytes raw_inner_content = 6;
 }
 
+message ParseEnrollPkioRequest {
+  bytes scep_der = 1;
+  string ca_key_id = 2;
+}
+
+message ParseEnrollPkioResponse {
+  ScepSignedAttributes attributes = 1;
+  bytes csr_der = 2;
+  bytes wrapper_cert_der = 3;
+}
+
 message EncodeCertAliasContentRequest {
   CertAliasContentType content_type = 1;
   string value = 2;
@@ -139,31 +132,4 @@ message DecodeCertAliasContentResponse {
   CertAliasContentType content_type = 1;
   string alias_or_cn = 2;
   string serial_number_hex = 3;
-}
-
-message EncodeScepHttpQueryRequest {
-  ScepHttpOperation operation = 1;
-  string message = 2;
-  string dir_name = 3;
-}
-
-message EncodeScepHttpQueryResponse {
-  string query_path = 1;
-}
-
-message VerifyScepResponseMimeRequest {
-  ScepHttpOperation operation = 1;
-  string content_type = 2;
-}
-
-message VerifyScepResponseMimeResponse {
-  bool valid = 1;
-}
-
-message GetScepExpectedMimeRequest {
-  ScepHttpOperation operation = 1;
-}
-
-message GetScepExpectedMimeResponse {
-  string mime_type = 1;
 }

@@ -218,6 +218,20 @@ impl Client {
         .await
     }
 
+    pub async fn parse_enroll_pkio(
+        &self,
+        req: ParseEnrollPkioRequest,
+    ) -> Result<ParseEnrollPkioResponse> {
+        self.with_scep_ext(|mut client| async move {
+            client
+                .parse_enroll_pkio(req)
+                .await
+                .map(|r| r.into_inner())
+                .context("ParseEnrollPkio rpc")
+        })
+        .await
+    }
+
     pub async fn encode_cert_alias_content(
         &self,
         req: EncodeCertAliasContentRequest,
@@ -242,48 +256,6 @@ impl Client {
                 .await
                 .map(|r| r.into_inner())
                 .context("DecodeCertAliasContent rpc")
-        })
-        .await
-    }
-
-    pub async fn encode_scep_http_query(
-        &self,
-        req: EncodeScepHttpQueryRequest,
-    ) -> Result<EncodeScepHttpQueryResponse> {
-        self.with_scep_ext(|mut client| async move {
-            client
-                .encode_scep_http_query(req)
-                .await
-                .map(|r| r.into_inner())
-                .context("EncodeScepHttpQuery rpc")
-        })
-        .await
-    }
-
-    pub async fn verify_scep_response_mime(
-        &self,
-        req: VerifyScepResponseMimeRequest,
-    ) -> Result<VerifyScepResponseMimeResponse> {
-        self.with_scep_ext(|mut client| async move {
-            client
-                .verify_scep_response_mime(req)
-                .await
-                .map(|r| r.into_inner())
-                .context("VerifyScepResponseMime rpc")
-        })
-        .await
-    }
-
-    pub async fn get_scep_expected_mime(
-        &self,
-        req: GetScepExpectedMimeRequest,
-    ) -> Result<GetScepExpectedMimeResponse> {
-        self.with_scep_ext(|mut client| async move {
-            client
-                .get_scep_expected_mime(req)
-                .await
-                .map(|r| r.into_inner())
-                .context("GetScepExpectedMime rpc")
         })
         .await
     }

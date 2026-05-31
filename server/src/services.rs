@@ -521,6 +521,28 @@ impl ScepExtService for ScepExtServiceImpl {
         Ok(Response::new(resp))
     }
 
+    async fn parse_enroll_pkio(
+        &self,
+        request: Request<ParseEnrollPkioRequest>,
+    ) -> Result<Response<ParseEnrollPkioResponse>, Status> {
+        let req = request.into_inner();
+        if req.scep_der.len() > MAX_SMALL_PACKET {
+            return Err(Status::invalid_argument("scep_der too large"));
+        }
+        let access = self
+            .state
+            .keys
+            .access_key(&req.ca_key_id)
+            .map_err(map_key_store_err)?;
+        let scep_der = req.scep_der;
+        let state = self.state.clone();
+        let resp = run_crypto(&state, move || {
+            crypto_scep_ext::parse_enroll_pkio(&scep_der, access)
+        })
+        .await?;
+        Ok(Response::new(resp))
+    }
+
     async fn encode_cert_alias_content(
         &self,
         request: Request<EncodeCertAliasContentRequest>,
@@ -559,37 +581,6 @@ impl ScepExtService for ScepExtServiceImpl {
         }))
     }
 
-    async fn encode_scep_http_query(
-        &self,
-        request: Request<EncodeScepHttpQueryRequest>,
-    ) -> Result<Response<EncodeScepHttpQueryResponse>, Status> {
-        let req = request.into_inner();
-        if req.message.len() > MAX_SMALL_PACKET || req.dir_name.len() > 1024 {
-            return Err(Status::invalid_argument("request field too large"));
-        }
-        let query_path = crypto_scep_ext::encode_http_query(req.operation, &req.message, &req.dir_name)
-            .map_err(map_crypto_err)?;
-        Ok(Response::new(EncodeScepHttpQueryResponse { query_path }))
-    }
-
-    async fn verify_scep_response_mime(
-        &self,
-        request: Request<VerifyScepResponseMimeRequest>,
-    ) -> Result<Response<VerifyScepResponseMimeResponse>, Status> {
-        let req = request.into_inner();
-        let valid = crypto_scep_ext::verify_response_mime(req.operation, &req.content_type)
-            .map_err(map_crypto_err)?;
-        Ok(Response::new(VerifyScepResponseMimeResponse { valid }))
-    }
-
-    async fn get_scep_expected_mime(
-        &self,
-        request: Request<GetScepExpectedMimeRequest>,
-    ) -> Result<Response<GetScepExpectedMimeResponse>, Status> {
-        let req = request.into_inner();
-        let mime_type = crypto_scep_ext::expected_mime(req.operation).map_err(map_crypto_err)?;
-        Ok(Response::new(GetScepExpectedMimeResponse { mime_type }))
-    }
 }
 
 fn map_key_store_err(err: anyhow::Error) -> Status {

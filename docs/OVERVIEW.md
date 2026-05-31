@@ -69,7 +69,7 @@ flowchart TB
 | **SignService** | Sign / Verify | 通用数据签名；RSA / ECDSA / SM2 / Ed25519 |
 | **CmsService** | Parse / Build / Verify | PKCS#7 解析、封装、验签 |
 | **ScepService** | ParseRequest / Build*CertRep | RFC 8894 PKIO / CertRep 密码运算 |
-| **ScepExtService** | ParseSignedAttributes / ParseGetCertPkio / CertAlias / HTTP | 自定义 SCEP 协议（见 `docs/reference/scep/`） |
+| **ScepExtService** | ParseEnrollPkio / ParseGetCertPkio / CertAlias | 自定义 SCEP ASN.1 扩展（见 `docs/reference/scep/`） |
 
 ### 4.1 算法支持
 

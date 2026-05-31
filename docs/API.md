@@ -724,21 +724,19 @@ rep, _ := cli.BuildScepPendingCertRep(ctx, &pb.BuildScepPendingCertRepRequest{
 
 | 职责 | ScepService | ScepExtService |
 |------|-------------|----------------|
-| PKIO 解密 → CSR | `ParseRequest` | — |
+| PKIO 解密 → CSR（含 SignedAttributes） | `ParseRequest`（仅 CSR） | **`ParseEnrollPkio`（推荐）** |
 | GetCert PKIO → CertAliasOrCn | — | `ParseGetCertPkio` |
 | CertRep 构建 | `Build*CertRep` | — |
-| SignedAttributes 解析 | — | `ParseSignedAttributes` |
+| 仅解析 SignedAttributes | — | `ParseSignedAttributes` |
 | CertAliasOrCn 编解码 | — | `Encode/DecodeCertAliasContent` |
-| HTTP query / MIME | — | `EncodeScepHttpQuery` 等 |
 
 **典型组合流程**
 
 ```mermaid
 flowchart LR
   subgraph Enroll["证书申请 Enroll"]
-    A1[ScepExt: ParseSignedAttributes] --> A2[ScepService: ParseRequest]
-    A2 --> RA[业务 RA]
-    RA --> A3[ScepService: BuildSuccessCertRep]
+    A1[ScepExt: ParseEnrollPkio] --> RA[业务 RA]
+    RA --> A2[ScepService: BuildSuccessCertRep]
   end
   subgraph GetCert["按 alias 取证 GetCert"]
     B1[ScepExt: ParseGetCertPkio] --> B2[业务查库]
@@ -746,21 +744,25 @@ flowchart LR
   end
 ```
 
+### ParseEnrollPkio
+
+一次 RPC 完成 Enroll 类 PKIO 解析：**SignedAttributes**（含 `extensionReq`、`proxyAuth`）+ **CSR DER** + **wrapper_cert_der**。与 `ParseGetCertPkio` 对称，替代原先 `ParseSignedAttributes` + `ParseRequest` 两次调用。
+
+> `ScepService.ParseRequest` 仍保留，适用于不需要扩展属性、只需 CSR 的简化场景。
+
 ### ParseSignedAttributes
 
-从 PKCS#7 DER（PKIO / CertRep）解析 SCEP 属性，含 `extensionReq`（2.16.840.1.113733.1.9.8）、`proxyAuth`（1.3.6.1.4.1.4263.5.5）、`failInfoText`（兼容 RFC `.24.1` 与客户端 `.24`）。
+从 PKCS#7 DER（PKIO / CertRep）**单独**解析 SCEP 属性，含 `extensionReq`（2.16.840.1.113733.1.9.8）、`proxyAuth`（1.3.6.1.4.1.4263.5.5）、`failInfoText`（兼容 RFC `.24.1` 与客户端 `.24`）。Enroll 入站请求优先使用 **`ParseEnrollPkio`**。
 
 ### ParseGetCertPkio
 
-与 `ParseRequest` 相同的外层 PKIO 结构，内层为 **CertAliasOrCn**（alias / commonName / serialNumber），而非 CSR。
+与 `ParseRequest` 相同的外层 PKIO 结构，内层为 **CertAliasOrCn**（alias / commonName / serialNumber），而非 CSR。一次 RPC 同时返回 SignedAttributes。
 
 ### EncodeCertAliasContent / DecodeCertAliasContent
 
 对应 `ContentInfo`：`[0] alias`、`[1] commonName`、或 SerialNumber SEQUENCE。
 
-### EncodeScepHttpQuery / VerifyScepResponseMime / GetScepExpectedMime
-
-对应 `RequestMessage::EncodeMessage` 与 `ResponseMessage::VerifyContentType`（无密码运算，可在业务侧直接拼 URL，offload 提供统一实现）。
+> HTTP 层（`?operation=`、`Content-Type`、base64 `message`）由业务 SCEP 网关（如 Go SCEP）处理；offload 只接收/返回 PKCS#7 DER。
 
 ---
 

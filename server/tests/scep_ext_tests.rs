@@ -27,22 +27,6 @@ fn scep_ext_encode_decode_serial_number() {
 }
 
 #[test]
-fn scep_ext_http_query_and_mime() {
-    let q = crypto_scep_ext::encode_http_query(3, "abc123", "").expect("query");
-    assert_eq!(q, "/scep/pkiclient?operation=PKIOperation&message=abc123");
-
-    let q2 = crypto_scep_ext::encode_http_query(1, "", "/custom/scep").expect("getca");
-    assert_eq!(q2, "/custom/scep?operation=GetCACert");
-
-    assert!(crypto_scep_ext::verify_response_mime(3, "application/x-pki-message").unwrap());
-    assert!(!crypto_scep_ext::verify_response_mime(1, "application/x-pki-message").unwrap());
-    assert_eq!(
-        crypto_scep_ext::expected_mime(5).unwrap(),
-        "application/x-pki-message"
-    );
-}
-
-#[test]
 fn scep_ext_parse_signed_attributes_from_certrep() {
     openssl_init::init();
     use crypto_offload_server::cryptooffload::v1::{KeyFormat, KeyKind, KeyLifetime};
@@ -81,6 +65,45 @@ fn scep_ext_parse_signed_attributes_from_certrep() {
     assert_eq!(attrs.fail_info, 3); // badRequest proto enum
     assert_eq!(attrs.fail_info_text, "policy deny");
     assert_eq!(attrs.recipient_nonce, vec![1, 2, 3, 4]);
+}
+
+#[test]
+fn scep_ext_parse_enroll_pkio() {
+    openssl_init::init();
+    use crypto_offload_server::cryptooffload::v1::{KeyFormat, KeyKind, KeyLifetime};
+    use crypto_offload_server::crypto_scep;
+    use crypto_offload_server::key_store::KeyStore;
+    use crypto_offload_server::test_support::{generate_rsa2048_der_cert, generate_scep_pkio};
+    use openssl::x509::X509;
+
+    let store = KeyStore::new();
+    let (ca_pem, ca_der) = generate_rsa2048_der_cert().expect("ca");
+    let ca_cert = X509::from_der(&ca_der).expect("cert");
+    let (pkio, expected_csr, expected_wrapper) = generate_scep_pkio(&ca_cert).expect("pkio");
+
+    let meta = store
+        .import_key(
+            KeyKind::Private as i32,
+            KeyLifetime::Permanent as i32,
+            KeyFormat::Pem as i32,
+            &ca_pem,
+            "ca",
+            &ca_der,
+            KeyFormat::Der as i32,
+        )
+        .expect("import");
+    let access = store.access_key(&meta.key_id).expect("access");
+
+    let resp = crypto_scep_ext::parse_enroll_pkio(&pkio, access).expect("parse enroll");
+    assert_eq!(resp.csr_der, expected_csr);
+    assert_eq!(resp.wrapper_cert_der, expected_wrapper);
+    assert!(resp.attributes.is_some());
+
+    // 与 ScepService.ParseRequest 结果一致
+    let access2 = store.access_key(&meta.key_id).expect("access");
+    let (csr2, wrapper2) = crypto_scep::parse_request(&pkio, access2).expect("parse request");
+    assert_eq!(resp.csr_der, csr2);
+    assert_eq!(resp.wrapper_cert_der, wrapper2);
 }
 
 #[test]

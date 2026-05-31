@@ -272,6 +272,21 @@ func (c *Client) ParseGetCertPkio(ctx context.Context, req *pb.ParseGetCertPkioR
 	return resp, err
 }
 
+// ParseEnrollPkio 解析 Enroll PKIO（SignedAttributes + CSR，一次 RPC）。
+func (c *Client) ParseEnrollPkio(ctx context.Context, req *pb.ParseEnrollPkioRequest) (*pb.ParseEnrollPkioResponse, error) {
+	var resp *pb.ParseEnrollPkioResponse
+	err := c.withConn(ctx, func(conn *pool.Conn) error {
+		cli := pb.NewScepExtServiceClient(conn.GRPC())
+		out, err := cli.ParseEnrollPkio(ctx, req)
+		if err != nil {
+			return err
+		}
+		resp = out
+		return nil
+	})
+	return resp, err
+}
+
 // EncodeCertAliasContent 编码 CertAliasOrCn / SerialNumber DER。
 func (c *Client) EncodeCertAliasContent(ctx context.Context, req *pb.EncodeCertAliasContentRequest) (*pb.EncodeCertAliasContentResponse, error) {
 	var resp *pb.EncodeCertAliasContentResponse
@@ -287,17 +302,3 @@ func (c *Client) EncodeCertAliasContent(ctx context.Context, req *pb.EncodeCertA
 	return resp, err
 }
 
-// EncodeScepHttpQuery 构建 SCEP HTTP query。
-func (c *Client) EncodeScepHttpQuery(ctx context.Context, req *pb.EncodeScepHttpQueryRequest) (*pb.EncodeScepHttpQueryResponse, error) {
-	var resp *pb.EncodeScepHttpQueryResponse
-	err := c.withConn(ctx, func(conn *pool.Conn) error {
-		cli := pb.NewScepExtServiceClient(conn.GRPC())
-		out, err := cli.EncodeScepHttpQuery(ctx, req)
-		if err != nil {
-			return err
-		}
-		resp = out
-		return nil
-	})
-	return resp, err
-}

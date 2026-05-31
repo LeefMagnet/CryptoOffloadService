@@ -152,20 +152,19 @@ class Client:
             return stub.ParseGetCertPkio(req)
         return self._call(run)
 
+    def parse_enroll_pkio(self, **kwargs):
+        req = scep_ext_service_pb2.ParseEnrollPkioRequest(**kwargs)
+        def run(conn: Conn):
+            stub = scep_ext_service_pb2_grpc.ScepExtServiceStub(conn.channel)
+            return stub.ParseEnrollPkio(req)
+        return self._call(run)
+
     def encode_cert_alias_content(self, **kwargs):
         req = scep_ext_service_pb2.EncodeCertAliasContentRequest(**kwargs)
         def run(conn: Conn):
             stub = scep_ext_service_pb2_grpc.ScepExtServiceStub(conn.channel)
             return stub.EncodeCertAliasContent(req)
         return self._call(run)
-
-    def encode_scep_http_query(self, **kwargs):
-        req = scep_ext_service_pb2.EncodeScepHttpQueryRequest(**kwargs)
-        def run(conn: Conn):
-            stub = scep_ext_service_pb2_grpc.ScepExtServiceStub(conn.channel)
-            return stub.EncodeScepHttpQuery(req)
-        return self._call(run)
-
 
 # 便捷枚举导出
 KeyKind = common_pb2.KeyKind

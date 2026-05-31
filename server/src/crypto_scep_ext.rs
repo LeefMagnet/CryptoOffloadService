@@ -4,7 +4,6 @@ use anyhow::{anyhow, Result};
 
 use crate::key_store::KeyAccess;
 use crate::scep_cert_alias::{self, CertAliasType};
-use crate::scep_http;
 use crate::scep_pkio;
 use crate::scep_signed_attrs::{self, parsed_to_proto};
 
@@ -44,6 +43,23 @@ pub fn parse_getcert_pkio(
     })
 }
 
+pub fn parse_enroll_pkio(
+    scep_der: &[u8],
+    access: KeyAccess,
+) -> Result<crate::pb::ParseEnrollPkioResponse> {
+    crate::openssl_init::init();
+    if scep_der.is_empty() {
+        anyhow::bail!("scep_der must not be empty");
+    }
+    let (csr_der, wrapper_cert_der) = scep_pkio::decrypt_pkio_envelope(scep_der, &access)?;
+    let attrs = scep_signed_attrs::parse_from_pkcs7_der(scep_der)?;
+    Ok(crate::pb::ParseEnrollPkioResponse {
+        attributes: Some(parsed_to_proto(attrs)),
+        csr_der,
+        wrapper_cert_der,
+    })
+}
+
 pub fn encode_cert_alias_content(content_type: i32, value: &str) -> Result<Vec<u8>> {
     let t = scep_cert_alias::cert_alias_type_from_proto(content_type)?;
     scep_cert_alias::encode_cert_alias_content(t, value)
@@ -59,21 +75,6 @@ pub fn decode_cert_alias_content(content_der: &[u8]) -> Result<(i32, String, Str
         )),
         _ => Ok((scep_cert_alias::cert_alias_type_to_proto(t), v, String::new())),
     }
-}
-
-pub fn encode_http_query(operation: i32, message: &str, dir_name: &str) -> Result<String> {
-    let op = scep_http::http_operation_from_proto(operation)?;
-    Ok(scep_http::encode_http_query(op, message, dir_name))
-}
-
-pub fn verify_response_mime(operation: i32, content_type: &str) -> Result<bool> {
-    let op = scep_http::http_operation_from_proto(operation)?;
-    Ok(scep_http::verify_response_mime(op, content_type))
-}
-
-pub fn expected_mime(operation: i32) -> Result<String> {
-    let op = scep_http::http_operation_from_proto(operation)?;
-    Ok(scep_http::expected_mime(op).to_string())
 }
 
 pub fn validate_ext_field_len(field: &str, max: usize) -> Result<()> {

@@ -89,7 +89,7 @@ impl Pool {
             return Ok(PooledConn {
                 pool: self.clone(),
                 channel: Some(channel),
-                permit,
+                _permit: permit,
             });
         }
 

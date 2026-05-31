@@ -1,0 +1,169 @@
+syntax = "proto3";
+
+package cryptooffload.v1;
+
+option go_package = "github.com/cryptooffload/sdk-go/gen/cryptooffload/v1;cryptooffloadv1";
+option java_package = "cryptooffload.v1";
+option java_multiple_files = true;
+
+// 自定义 SCEP 扩展（与 scep_service.proto 配合）：
+// - scep_service：PKIO 解密 / CertRep 构建（RFC 8894 密码运算）
+// - scep_ext_service：SignedAttributes 解析、CertAliasOrCn、HTTP/MIME 辅助
+//
+// 参考客户端：docs/reference/scep/
+
+// SCEP HTTP ?operation= 映射（iwall::Message::OperationType）
+enum ScepHttpOperation {
+  SCEP_HTTP_OPERATION_UNSPECIFIED = 0;
+  SCEP_HTTP_OPERATION_GET_CA = 1;
+  SCEP_HTTP_OPERATION_GET_CA_RA = 2;
+  SCEP_HTTP_OPERATION_ENROLL = 3;
+  SCEP_HTTP_OPERATION_GET_CERT = 5;
+  SCEP_HTTP_OPERATION_GET_CRL = 7;
+  SCEP_HTTP_OPERATION_GET_NEXT_CA = 15;
+  SCEP_HTTP_OPERATION_GET_CA_CAPS = 31;
+}
+
+// SCEP messageType 属性（VeriSign OID 2.16.840.1.113733.1.9.2）
+enum ScepMessageType {
+  SCEP_MESSAGE_TYPE_UNSPECIFIED = 0;
+  SCEP_MESSAGE_TYPE_CERT_REP = 3;
+  SCEP_MESSAGE_TYPE_PKCS_REQ = 19;
+  SCEP_MESSAGE_TYPE_GET_CERT_INITIAL = 20;
+  SCEP_MESSAGE_TYPE_GET_CERT = 21;
+  SCEP_MESSAGE_TYPE_GET_CRL = 22;
+}
+
+enum ScepPkiStatus {
+  SCEP_PKI_STATUS_UNSPECIFIED = 0;
+  SCEP_PKI_STATUS_SUCCESS = 1;   // wire 0
+  SCEP_PKI_STATUS_FAILURE = 2;   // wire 2
+  SCEP_PKI_STATUS_PENDING = 3;   // wire 3
+}
+
+enum ScepFailInfo {
+  SCEP_FAIL_INFO_UNSPECIFIED = 0;
+  SCEP_FAIL_INFO_BAD_ALG = 1;           // wire 0
+  SCEP_FAIL_INFO_BAD_MESSAGE_CHECK = 2; // wire 1
+  SCEP_FAIL_INFO_BAD_REQUEST = 3;       // wire 2
+  SCEP_FAIL_INFO_BAD_TIME = 4;          // wire 3
+  SCEP_FAIL_INFO_BAD_CERT_ID = 5;       // wire 4
+  SCEP_FAIL_INFO_BAD_UNKNOWN = 6;       // wire 5，客户端扩展
+}
+
+// GetCert 内层自定义 CertAliasOrCn（docs/reference/scep/content_info.h）
+enum CertAliasContentType {
+  CERT_ALIAS_CONTENT_TYPE_UNSPECIFIED = 0;
+  CERT_ALIAS_CONTENT_TYPE_ALIAS = 1;
+  CERT_ALIAS_CONTENT_TYPE_COMMON_NAME = 2;
+  CERT_ALIAS_CONTENT_TYPE_SERIAL_NUMBER = 3;
+}
+
+// 从 PKCS#7 SignedData 解析 SCEP SignedAttributes（含 extensionReq / proxyAuth）
+message ScepSignedAttributes {
+  string transaction_id = 1;
+  ScepMessageType message_type = 2;
+  ScepPkiStatus pki_status = 3;
+  ScepFailInfo fail_info = 4;
+  string fail_info_text = 5;
+  bytes sender_nonce = 6;
+  bytes recipient_nonce = 7;
+  bytes signing_time_der = 8;
+  bytes extension_req = 9;
+  bytes proxy_auth = 10;
+}
+
+service ScepExtService {
+  // 解析 PKCS#7 DER（PKIO / CertRep）外层 SignedData 上的 SCEP 属性
+  rpc ParseSignedAttributes(ParseScepSignedAttributesRequest)
+      returns (ParseScepSignedAttributesResponse);
+
+  // GetCert / GetCRL 类 PKIO：解密 EnvelopedData 并解析 CertAliasOrCn 内层
+  rpc ParseGetCertPkio(ParseGetCertPkioRequest) returns (ParseGetCertPkioResponse);
+
+  // 编码 CertAliasOrCn 或 SerialNumber 内层 content（GetCert 请求体）
+  rpc EncodeCertAliasContent(EncodeCertAliasContentRequest)
+      returns (EncodeCertAliasContentResponse);
+
+  // 解码 CertAliasOrCn / SerialNumber DER
+  rpc DecodeCertAliasContent(DecodeCertAliasContentRequest)
+      returns (DecodeCertAliasContentResponse);
+
+  // 构建 SCEP HTTP query（/scep/pkiclient?operation=...&message=...）
+  rpc EncodeScepHttpQuery(EncodeScepHttpQueryRequest) returns (EncodeScepHttpQueryResponse);
+
+  // 校验 HTTP 响应 Content-Type 是否与 operation 匹配
+  rpc VerifyScepResponseMime(VerifyScepResponseMimeRequest)
+      returns (VerifyScepResponseMimeResponse);
+
+  // 查询 operation 对应的期望 Content-Type
+  rpc GetScepExpectedMime(GetScepExpectedMimeRequest) returns (GetScepExpectedMimeResponse);
+}
+
+message ParseScepSignedAttributesRequest {
+  bytes pkcs7_der = 1;
+}
+
+message ParseScepSignedAttributesResponse {
+  ScepSignedAttributes attributes = 1;
+}
+
+message ParseGetCertPkioRequest {
+  bytes scep_der = 1;
+  string ca_key_id = 2;
+}
+
+message ParseGetCertPkioResponse {
+  ScepSignedAttributes attributes = 1;
+  CertAliasContentType content_type = 2;
+  string alias_or_cn = 3;
+  string serial_number_hex = 4;
+  bytes wrapper_cert_der = 5;
+  bytes raw_inner_content = 6;
+}
+
+message EncodeCertAliasContentRequest {
+  CertAliasContentType content_type = 1;
+  string value = 2;
+}
+
+message EncodeCertAliasContentResponse {
+  bytes content_der = 1;
+}
+
+message DecodeCertAliasContentRequest {
+  bytes content_der = 1;
+}
+
+message DecodeCertAliasContentResponse {
+  CertAliasContentType content_type = 1;
+  string alias_or_cn = 2;
+  string serial_number_hex = 3;
+}
+
+message EncodeScepHttpQueryRequest {
+  ScepHttpOperation operation = 1;
+  string message = 2;
+  string dir_name = 3;
+}
+
+message EncodeScepHttpQueryResponse {
+  string query_path = 1;
+}
+
+message VerifyScepResponseMimeRequest {
+  ScepHttpOperation operation = 1;
+  string content_type = 2;
+}
+
+message VerifyScepResponseMimeResponse {
+  bool valid = 1;
+}
+
+message GetScepExpectedMimeRequest {
+  ScepHttpOperation operation = 1;
+}
+
+message GetScepExpectedMimeResponse {
+  string mime_type = 1;
+}

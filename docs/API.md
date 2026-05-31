@@ -19,6 +19,7 @@
 | `SignService` | 数据签名与验签（通过 `key_id` 引用密钥） |
 | `CmsService` | CMS/PKCS#7 解析、封装、验签 |
 | `ScepService` | SCEP PKIO 解析与 CertRep 构建（RFC 8894） |
+| `ScepExtService` | SCEP 自定义扩展：SignedAttributes、CertAliasOrCn、HTTP/MIME |
 
 ### 1.2 架构与职责边界
 
@@ -714,6 +715,52 @@ rep, _ := cli.BuildScepPendingCertRep(ctx, &pb.BuildScepPendingCertRepRequest{
 ```
 
 > 服务端启动时会注册 VeriSign SCEP 专有 OID 并加载 OpenSSL legacy provider（3DES 解密）。
+
+---
+
+## 6.5 ScepExtService（自定义 SCEP 扩展）
+
+与 **`ScepService`** 配合，承接参考客户端 `docs/reference/scep/` 中的自定义协议部分：
+
+| 职责 | ScepService | ScepExtService |
+|------|-------------|----------------|
+| PKIO 解密 → CSR | `ParseRequest` | — |
+| GetCert PKIO → CertAliasOrCn | — | `ParseGetCertPkio` |
+| CertRep 构建 | `Build*CertRep` | — |
+| SignedAttributes 解析 | — | `ParseSignedAttributes` |
+| CertAliasOrCn 编解码 | — | `Encode/DecodeCertAliasContent` |
+| HTTP query / MIME | — | `EncodeScepHttpQuery` 等 |
+
+**典型组合流程**
+
+```mermaid
+flowchart LR
+  subgraph Enroll["证书申请 Enroll"]
+    A1[ScepExt: ParseSignedAttributes] --> A2[ScepService: ParseRequest]
+    A2 --> RA[业务 RA]
+    RA --> A3[ScepService: BuildSuccessCertRep]
+  end
+  subgraph GetCert["按 alias 取证 GetCert"]
+    B1[ScepExt: ParseGetCertPkio] --> B2[业务查库]
+    B2 --> B3[ScepService: BuildSuccessCertRep]
+  end
+```
+
+### ParseSignedAttributes
+
+从 PKCS#7 DER（PKIO / CertRep）解析 SCEP 属性，含 `extensionReq`（2.16.840.1.113733.1.9.8）、`proxyAuth`（1.3.6.1.4.1.4263.5.5）、`failInfoText`（兼容 RFC `.24.1` 与客户端 `.24`）。
+
+### ParseGetCertPkio
+
+与 `ParseRequest` 相同的外层 PKIO 结构，内层为 **CertAliasOrCn**（alias / commonName / serialNumber），而非 CSR。
+
+### EncodeCertAliasContent / DecodeCertAliasContent
+
+对应 `ContentInfo`：`[0] alias`、`[1] commonName`、或 SerialNumber SEQUENCE。
+
+### EncodeScepHttpQuery / VerifyScepResponseMime / GetScepExpectedMime
+
+对应 `RequestMessage::EncodeMessage` 与 `ResponseMessage::VerifyContentType`（无密码运算，可在业务侧直接拼 URL，offload 提供统一实现）。
 
 ---
 

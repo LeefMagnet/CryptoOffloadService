@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 
 use crate::pb::v1::cms_service_client::CmsServiceClient;
 use crate::pb::v1::key_service_client::KeyServiceClient;
+use crate::pb::v1::scep_ext_service_client::ScepExtServiceClient;
 use crate::pb::v1::scep_service_client::ScepServiceClient;
 use crate::pb::v1::sign_service_client::SignServiceClient;
 use crate::pb::v1::*;
@@ -189,6 +190,104 @@ impl Client {
         .await
     }
 
+    pub async fn parse_scep_signed_attributes(
+        &self,
+        req: ParseScepSignedAttributesRequest,
+    ) -> Result<ParseScepSignedAttributesResponse> {
+        self.with_scep_ext(|mut client| async move {
+            client
+                .parse_signed_attributes(req)
+                .await
+                .map(|r| r.into_inner())
+                .context("ParseScepSignedAttributes rpc")
+        })
+        .await
+    }
+
+    pub async fn parse_get_cert_pkio(
+        &self,
+        req: ParseGetCertPkioRequest,
+    ) -> Result<ParseGetCertPkioResponse> {
+        self.with_scep_ext(|mut client| async move {
+            client
+                .parse_get_cert_pkio(req)
+                .await
+                .map(|r| r.into_inner())
+                .context("ParseGetCertPkio rpc")
+        })
+        .await
+    }
+
+    pub async fn encode_cert_alias_content(
+        &self,
+        req: EncodeCertAliasContentRequest,
+    ) -> Result<EncodeCertAliasContentResponse> {
+        self.with_scep_ext(|mut client| async move {
+            client
+                .encode_cert_alias_content(req)
+                .await
+                .map(|r| r.into_inner())
+                .context("EncodeCertAliasContent rpc")
+        })
+        .await
+    }
+
+    pub async fn decode_cert_alias_content(
+        &self,
+        req: DecodeCertAliasContentRequest,
+    ) -> Result<DecodeCertAliasContentResponse> {
+        self.with_scep_ext(|mut client| async move {
+            client
+                .decode_cert_alias_content(req)
+                .await
+                .map(|r| r.into_inner())
+                .context("DecodeCertAliasContent rpc")
+        })
+        .await
+    }
+
+    pub async fn encode_scep_http_query(
+        &self,
+        req: EncodeScepHttpQueryRequest,
+    ) -> Result<EncodeScepHttpQueryResponse> {
+        self.with_scep_ext(|mut client| async move {
+            client
+                .encode_scep_http_query(req)
+                .await
+                .map(|r| r.into_inner())
+                .context("EncodeScepHttpQuery rpc")
+        })
+        .await
+    }
+
+    pub async fn verify_scep_response_mime(
+        &self,
+        req: VerifyScepResponseMimeRequest,
+    ) -> Result<VerifyScepResponseMimeResponse> {
+        self.with_scep_ext(|mut client| async move {
+            client
+                .verify_scep_response_mime(req)
+                .await
+                .map(|r| r.into_inner())
+                .context("VerifyScepResponseMime rpc")
+        })
+        .await
+    }
+
+    pub async fn get_scep_expected_mime(
+        &self,
+        req: GetScepExpectedMimeRequest,
+    ) -> Result<GetScepExpectedMimeResponse> {
+        self.with_scep_ext(|mut client| async move {
+            client
+                .get_scep_expected_mime(req)
+                .await
+                .map(|r| r.into_inner())
+                .context("GetScepExpectedMime rpc")
+        })
+        .await
+    }
+
     async fn with_key<F, Fut, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce(KeyServiceClient<tonic::transport::Channel>) -> Fut,
@@ -227,5 +326,15 @@ impl Client {
         let conn = self.pool.acquire().await?;
         let channel = conn.channel()?;
         f(ScepServiceClient::new(channel)).await
+    }
+
+    async fn with_scep_ext<F, Fut, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(ScepExtServiceClient<tonic::transport::Channel>) -> Fut,
+        Fut: std::future::Future<Output = Result<T>>,
+    {
+        let conn = self.pool.acquire().await?;
+        let channel = conn.channel()?;
+        f(ScepExtServiceClient::new(channel)).await
     }
 }

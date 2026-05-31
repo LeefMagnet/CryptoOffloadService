@@ -16,6 +16,8 @@ try:
         key_service_pb2_grpc,
         scep_service_pb2,
         scep_service_pb2_grpc,
+        scep_ext_service_pb2,
+        scep_ext_service_pb2_grpc,
         sign_service_pb2,
         sign_service_pb2_grpc,
     )
@@ -134,6 +136,34 @@ class Client:
         def run(conn: Conn):
             stub = scep_service_pb2_grpc.ScepServiceStub(conn.channel)
             return stub.BuildPendingCertRep(req)
+        return self._call(run)
+
+    def parse_scep_signed_attributes(self, **kwargs):
+        req = scep_ext_service_pb2.ParseScepSignedAttributesRequest(**kwargs)
+        def run(conn: Conn):
+            stub = scep_ext_service_pb2_grpc.ScepExtServiceStub(conn.channel)
+            return stub.ParseSignedAttributes(req)
+        return self._call(run)
+
+    def parse_get_cert_pkio(self, **kwargs):
+        req = scep_ext_service_pb2.ParseGetCertPkioRequest(**kwargs)
+        def run(conn: Conn):
+            stub = scep_ext_service_pb2_grpc.ScepExtServiceStub(conn.channel)
+            return stub.ParseGetCertPkio(req)
+        return self._call(run)
+
+    def encode_cert_alias_content(self, **kwargs):
+        req = scep_ext_service_pb2.EncodeCertAliasContentRequest(**kwargs)
+        def run(conn: Conn):
+            stub = scep_ext_service_pb2_grpc.ScepExtServiceStub(conn.channel)
+            return stub.EncodeCertAliasContent(req)
+        return self._call(run)
+
+    def encode_scep_http_query(self, **kwargs):
+        req = scep_ext_service_pb2.EncodeScepHttpQueryRequest(**kwargs)
+        def run(conn: Conn):
+            stub = scep_ext_service_pb2_grpc.ScepExtServiceStub(conn.channel)
+            return stub.EncodeScepHttpQuery(req)
         return self._call(run)
 
 

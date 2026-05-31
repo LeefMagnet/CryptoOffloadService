@@ -5,10 +5,12 @@ use tonic::{Request, Response, Status};
 
 use crate::crypto_cms;
 use crate::crypto_scep;
+use crate::crypto_scep_ext;
 use crate::crypto_sign;
 use crate::key_store::KeyStore;
 use crate::pb::cms_service_server::CmsService;
 use crate::pb::key_service_server::KeyService;
+use crate::pb::scep_ext_service_server::ScepExtService;
 use crate::pb::scep_service_server::ScepService;
 use crate::pb::sign_service_server::SignService;
 use crate::pb::*;
@@ -46,6 +48,10 @@ pub struct ScepServiceImpl {
     state: Arc<AppState>,
 }
 
+pub struct ScepExtServiceImpl {
+    state: Arc<AppState>,
+}
+
 impl KeyServiceImpl {
     pub fn new(state: Arc<AppState>) -> Self {
         Self { state }
@@ -65,6 +71,12 @@ impl CmsServiceImpl {
 }
 
 impl ScepServiceImpl {
+    pub fn new(state: Arc<AppState>) -> Self {
+        Self { state }
+    }
+}
+
+impl ScepExtServiceImpl {
     pub fn new(state: Arc<AppState>) -> Self {
         Self { state }
     }
@@ -463,6 +475,120 @@ impl ScepService for ScepServiceImpl {
         .await?;
 
         Ok(Response::new(BuildScepCertRepResponse { certrep_der }))
+    }
+}
+
+#[tonic::async_trait]
+impl ScepExtService for ScepExtServiceImpl {
+    async fn parse_signed_attributes(
+        &self,
+        request: Request<ParseScepSignedAttributesRequest>,
+    ) -> Result<Response<ParseScepSignedAttributesResponse>, Status> {
+        let req = request.into_inner();
+        if req.pkcs7_der.len() > MAX_SMALL_PACKET {
+            return Err(Status::invalid_argument("pkcs7_der too large"));
+        }
+        let pkcs7_der = req.pkcs7_der;
+        let state = self.state.clone();
+        let attributes = run_crypto(&state, move || {
+            crypto_scep_ext::parse_signed_attributes(&pkcs7_der)
+        })
+        .await?;
+        Ok(Response::new(ParseScepSignedAttributesResponse {
+            attributes: Some(attributes),
+        }))
+    }
+
+    async fn parse_get_cert_pkio(
+        &self,
+        request: Request<ParseGetCertPkioRequest>,
+    ) -> Result<Response<ParseGetCertPkioResponse>, Status> {
+        let req = request.into_inner();
+        if req.scep_der.len() > MAX_SMALL_PACKET {
+            return Err(Status::invalid_argument("scep_der too large"));
+        }
+        let access = self
+            .state
+            .keys
+            .access_key(&req.ca_key_id)
+            .map_err(map_key_store_err)?;
+        let scep_der = req.scep_der;
+        let state = self.state.clone();
+        let resp = run_crypto(&state, move || {
+            crypto_scep_ext::parse_getcert_pkio(&scep_der, access)
+        })
+        .await?;
+        Ok(Response::new(resp))
+    }
+
+    async fn encode_cert_alias_content(
+        &self,
+        request: Request<EncodeCertAliasContentRequest>,
+    ) -> Result<Response<EncodeCertAliasContentResponse>, Status> {
+        let req = request.into_inner();
+        if req.value.len() > MAX_SMALL_PACKET {
+            return Err(Status::invalid_argument("value too large"));
+        }
+        let content_type = req.content_type;
+        let value = req.value;
+        let state = self.state.clone();
+        let content_der = run_crypto(&state, move || {
+            crypto_scep_ext::encode_cert_alias_content(content_type, &value)
+        })
+        .await?;
+        Ok(Response::new(EncodeCertAliasContentResponse { content_der }))
+    }
+
+    async fn decode_cert_alias_content(
+        &self,
+        request: Request<DecodeCertAliasContentRequest>,
+    ) -> Result<Response<DecodeCertAliasContentResponse>, Status> {
+        let req = request.into_inner();
+        if req.content_der.len() > MAX_SMALL_PACKET {
+            return Err(Status::invalid_argument("content_der too large"));
+        }
+        let content_der = req.content_der;
+        let state = self.state.clone();
+        let (content_type, alias_or_cn, serial_number_hex) =
+            run_crypto(&state, move || crypto_scep_ext::decode_cert_alias_content(&content_der))
+                .await?;
+        Ok(Response::new(DecodeCertAliasContentResponse {
+            content_type,
+            alias_or_cn,
+            serial_number_hex,
+        }))
+    }
+
+    async fn encode_scep_http_query(
+        &self,
+        request: Request<EncodeScepHttpQueryRequest>,
+    ) -> Result<Response<EncodeScepHttpQueryResponse>, Status> {
+        let req = request.into_inner();
+        if req.message.len() > MAX_SMALL_PACKET || req.dir_name.len() > 1024 {
+            return Err(Status::invalid_argument("request field too large"));
+        }
+        let query_path = crypto_scep_ext::encode_http_query(req.operation, &req.message, &req.dir_name)
+            .map_err(map_crypto_err)?;
+        Ok(Response::new(EncodeScepHttpQueryResponse { query_path }))
+    }
+
+    async fn verify_scep_response_mime(
+        &self,
+        request: Request<VerifyScepResponseMimeRequest>,
+    ) -> Result<Response<VerifyScepResponseMimeResponse>, Status> {
+        let req = request.into_inner();
+        let valid = crypto_scep_ext::verify_response_mime(req.operation, &req.content_type)
+            .map_err(map_crypto_err)?;
+        Ok(Response::new(VerifyScepResponseMimeResponse { valid }))
+    }
+
+    async fn get_scep_expected_mime(
+        &self,
+        request: Request<GetScepExpectedMimeRequest>,
+    ) -> Result<Response<GetScepExpectedMimeResponse>, Status> {
+        let req = request.into_inner();
+        let mime_type = crypto_scep_ext::expected_mime(req.operation).map_err(map_crypto_err)?;
+        Ok(Response::new(GetScepExpectedMimeResponse { mime_type }))
     }
 }
 

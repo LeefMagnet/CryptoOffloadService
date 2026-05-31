@@ -2,19 +2,20 @@
 
 use crypto_offload_server::cryptooffload::v1::cms_service_client::CmsServiceClient;
 use crypto_offload_server::cryptooffload::v1::key_service_client::KeyServiceClient;
+use crypto_offload_server::cryptooffload::v1::scep_ext_service_client::ScepExtServiceClient;
 use crypto_offload_server::cryptooffload::v1::scep_service_client::ScepServiceClient;
 use crypto_offload_server::cryptooffload::v1::sign_service_client::SignServiceClient;
 use crypto_offload_server::cryptooffload::v1::{
     BuildCmsRequest, BuildScepFailureCertRepRequest, BuildScepPendingCertRepRequest,
     BuildScepSuccessCertRepRequest,
     GetKeyInfoRequest, HashAlgorithm, ImportKeyRequest, KeyFormat, KeyKind, KeyLifetime,
-    ListKeysRequest, ParseScepRequestRequest, SignAlgorithm, SignRequest, VerifyCmsRequest,
-    VerifyRequest,
+    ListKeysRequest, ParseGetCertPkioRequest, ParseScepRequestRequest, SignAlgorithm, SignRequest,
+    VerifyCmsRequest, VerifyRequest,
 };
 use crypto_offload_server::run_server;
 use crypto_offload_server::test_support::{
-    extract_public_pem, free_port, generate_rsa2048_der_cert, generate_rsa2048_pem,
-    generate_scep_pkio,
+    extract_public_pem, free_port, generate_getcert_pkio, generate_rsa2048_der_cert,
+    generate_rsa2048_pem, generate_scep_pkio,
 };
 use openssl::x509::X509;
 use tokio::time::{sleep, Duration};
@@ -302,6 +303,52 @@ async fn grpc_scep_pending_certrep() {
         .expect("build pending certrep")
         .into_inner();
     assert!(!resp.certrep_der.is_empty());
+}
+
+#[tokio::test]
+async fn grpc_scep_ext_parse_getcert_pkio() {
+    let url = start_test_server().await;
+    let channel = tonic::transport::Channel::from_shared(url)
+        .unwrap()
+        .connect()
+        .await
+        .expect("connect");
+
+    let (ca_pem, ca_der) = generate_rsa2048_der_cert().expect("ca");
+    let ca_cert = X509::from_der(&ca_der).expect("ca cert");
+    let (pkio_der, _inner, _wrapper) =
+        generate_getcert_pkio(&ca_cert, "grpc-getcert-alias").expect("pkio");
+
+    let mut key_client = KeyServiceClient::new(channel.clone());
+    let mut ext_client = ScepExtServiceClient::new(channel);
+
+    let ca = key_client
+        .import_key(ImportKeyRequest {
+            kind: KeyKind::Private as i32,
+            lifetime: KeyLifetime::Permanent as i32,
+            format: KeyFormat::Pem as i32,
+            key_data: ca_pem,
+            label: "scep-ext-ca".into(),
+            certificate_data: ca_der,
+            certificate_format: KeyFormat::Der as i32,
+            ..Default::default()
+        })
+        .await
+        .expect("import ca")
+        .into_inner();
+    let ca_id = ca.metadata.expect("metadata").key_id;
+
+    let parsed = ext_client
+        .parse_get_cert_pkio(ParseGetCertPkioRequest {
+            scep_der: pkio_der,
+            ca_key_id: ca_id,
+        })
+        .await
+        .expect("parse getcert pkio")
+        .into_inner();
+
+    assert_eq!(parsed.alias_or_cn, "grpc-getcert-alias");
+    assert_eq!(parsed.content_type, 1);
 }
 
 async fn grpc_sign_verify_roundtrip(

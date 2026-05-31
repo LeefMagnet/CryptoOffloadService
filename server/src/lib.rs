@@ -1,9 +1,14 @@
 pub mod crypto_cms;
 pub mod crypto_scep;
+pub mod crypto_scep_ext;
 pub mod crypto_sign;
 pub mod key_store;
 pub mod openssl_init;
+pub mod scep_cert_alias;
 pub mod scep_certrep;
+pub mod scep_http;
+pub mod scep_pkio;
+pub mod scep_signed_attrs;
 pub mod services;
 
 pub mod cryptooffload {
@@ -20,11 +25,14 @@ pub mod pb {
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use services::{AppState, CmsServiceImpl, KeyServiceImpl, ScepServiceImpl, SignServiceImpl};
+use services::{
+    AppState, CmsServiceImpl, KeyServiceImpl, ScepExtServiceImpl, ScepServiceImpl, SignServiceImpl,
+};
 use tonic::transport::Server;
 
 use crate::cryptooffload::v1::cms_service_server::CmsServiceServer;
 use crate::cryptooffload::v1::key_service_server::KeyServiceServer;
+use crate::cryptooffload::v1::scep_ext_service_server::ScepExtServiceServer;
 use crate::cryptooffload::v1::scep_service_server::ScepServiceServer;
 use crate::cryptooffload::v1::sign_service_server::SignServiceServer;
 
@@ -76,13 +84,15 @@ pub async fn run_server_with_config(config: ServerConfig) -> anyhow::Result<()> 
     let key_svc = KeyServiceImpl::new(state.clone());
     let sign_svc = SignServiceImpl::new(state.clone());
     let cms_svc = CmsServiceImpl::new(state.clone());
-    let scep_svc = ScepServiceImpl::new(state);
+    let scep_svc = ScepServiceImpl::new(state.clone());
+    let scep_ext_svc = ScepExtServiceImpl::new(state);
 
     Server::builder()
         .add_service(KeyServiceServer::new(key_svc))
         .add_service(SignServiceServer::new(sign_svc))
         .add_service(CmsServiceServer::new(cms_svc))
         .add_service(ScepServiceServer::new(scep_svc))
+        .add_service(ScepExtServiceServer::new(scep_ext_svc))
         .serve(config.listen)
         .await?;
 
@@ -181,7 +191,6 @@ pub mod test_support {
     /// 返回 `(pkio_der, csr_der, wrapper_cert_der)`。
     pub fn generate_scep_pkio(ca_cert: &X509) -> anyhow::Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
         crate::openssl_init::init();
-        use openssl::bn::BigNum;
         use openssl::pkcs7::{Pkcs7, Pkcs7Flags};
         use openssl::stack::Stack;
         use openssl::symm::Cipher;
@@ -244,6 +253,62 @@ pub mod test_support {
         let pkio_der = outer.to_der()?;
         let wrapper_cert_der = wrapper_cert.to_der()?;
         Ok((pkio_der, csr_der, wrapper_cert_der))
+    }
+
+    /// GetCert 类 PKIO：内层为 CertAliasOrCn（alias），结构同 PKIO。
+    pub fn generate_getcert_pkio(
+        ca_cert: &X509,
+        alias: &str,
+    ) -> anyhow::Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+        crate::openssl_init::init();
+        use crate::scep_cert_alias::{encode_cert_alias_content, CertAliasType};
+        use openssl::pkcs7::{Pkcs7, Pkcs7Flags};
+        use openssl::stack::Stack;
+        use openssl::symm::Cipher;
+
+        let inner_der = encode_cert_alias_content(CertAliasType::Alias, alias)?;
+
+        let wrapper_key = {
+            let rsa = Rsa::generate(2048)?;
+            PKey::from_rsa(rsa)?
+        };
+        let wrapper_cert = {
+            let mut name = X509NameBuilder::new()?;
+            name.append_entry_by_text("CN", "scep-getcert-wrapper")?;
+            let name = name.build();
+            let mut builder = X509Builder::new()?;
+            builder.set_version(2)?;
+            builder.set_subject_name(&name)?;
+            builder.set_issuer_name(&name)?;
+            builder.set_pubkey(&wrapper_key)?;
+            let not_before = Asn1Time::days_from_now(0)?;
+            let not_after = Asn1Time::days_from_now(365)?;
+            builder.set_not_before(&not_before)?;
+            builder.set_not_after(&not_after)?;
+            builder.sign(&wrapper_key, MessageDigest::sha256())?;
+            builder.build()
+        };
+
+        let mut recipients = Stack::new()?;
+        recipients.push(ca_cert.clone())?;
+        let enveloped = Pkcs7::encrypt(
+            &recipients,
+            &inner_der,
+            Cipher::des_ede3_cbc(),
+            Pkcs7Flags::BINARY,
+        )?;
+        let enveloped_der = enveloped.to_der()?;
+        let certs = Stack::new()?;
+        let outer = Pkcs7::sign(
+            &wrapper_cert,
+            &wrapper_key,
+            &certs,
+            &enveloped_der,
+            Pkcs7Flags::BINARY,
+        )?;
+        let pkio_der = outer.to_der()?;
+        let wrapper_cert_der = wrapper_cert.to_der()?;
+        Ok((pkio_der, inner_der, wrapper_cert_der))
     }
 
     pub fn free_port() -> SocketAddr {

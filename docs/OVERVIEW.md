@@ -68,7 +68,8 @@ flowchart TB
 | **KeyService** | ImportKey / DeleteKey / GetKeyInfo / ListKeys | 类 KMS 的 `key_id` 管理；永久/临时密钥 |
 | **SignService** | Sign / Verify | 通用数据签名；RSA / ECDSA / SM2 / Ed25519 |
 | **CmsService** | Parse / Build / Verify | PKCS#7 解析、封装、验签 |
-| **ScepService** | ParseRequest / BuildSuccessCertRep / BuildFailureCertRep / **BuildPendingCertRep** | RFC 8894 PKIO → CSR；SUCCESS / FAILURE / **PENDING** CertRep |
+| **ScepService** | ParseRequest / Build*CertRep | RFC 8894 PKIO / CertRep 密码运算 |
+| **ScepExtService** | ParseSignedAttributes / ParseGetCertPkio / CertAlias / HTTP | 自定义 SCEP 协议（见 `docs/reference/scep/`） |
 
 ### 4.1 算法支持
 
@@ -238,7 +239,7 @@ Java 21 可用**虚拟线程** + blocking SDK，等待 offload 时不占满平�
 - **Proto 包**：`cryptooffload.v1`
 - **默认端口**：`50051`
 - **OpenSSL**：**3.0+**（推荐 3.x）；SCEP 3DES 需加载 **legacy provider**；**SM2/SM3 国密自 3.0 起可用**，1.1.x 不支持
-- **当前版本**：0.1.x（见 git tag / Cargo.toml）
+- **当前版本**：0.2.x（`feature/scep-ext-v0.2` 分支；ScepExtService 扩展）
 
 **快速验证**
 

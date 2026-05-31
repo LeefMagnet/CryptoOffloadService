@@ -6,7 +6,16 @@ import cryptooffload.v1.CmsServiceOuterClass.BuildCmsResponse;
 import cryptooffload.v1.KeyServiceGrpc;
 import cryptooffload.v1.KeyServiceOuterClass.ImportKeyRequest;
 import cryptooffload.v1.KeyServiceOuterClass.ImportKeyResponse;
+import cryptooffload.v1.ScepExtServiceGrpc;
 import cryptooffload.v1.ScepServiceGrpc;
+import cryptooffload.v1.ScepExtServiceOuterClass.EncodeCertAliasContentRequest;
+import cryptooffload.v1.ScepExtServiceOuterClass.EncodeCertAliasContentResponse;
+import cryptooffload.v1.ScepExtServiceOuterClass.EncodeScepHttpQueryRequest;
+import cryptooffload.v1.ScepExtServiceOuterClass.EncodeScepHttpQueryResponse;
+import cryptooffload.v1.ScepExtServiceOuterClass.ParseGetCertPkioRequest;
+import cryptooffload.v1.ScepExtServiceOuterClass.ParseGetCertPkioResponse;
+import cryptooffload.v1.ScepExtServiceOuterClass.ParseScepSignedAttributesRequest;
+import cryptooffload.v1.ScepExtServiceOuterClass.ParseScepSignedAttributesResponse;
 import cryptooffload.v1.ScepServiceOuterClass.BuildScepCertRepResponse;
 import cryptooffload.v1.ScepServiceOuterClass.BuildScepFailureCertRepRequest;
 import cryptooffload.v1.ScepServiceOuterClass.BuildScepPendingCertRepRequest;
@@ -85,6 +94,34 @@ public final class CryptoOffloadClient implements AutoCloseable {
             throws InterruptedException {
         try (GrpcConnectionPool.PooledConn conn = pool.acquire()) {
             return ScepServiceGrpc.newBlockingStub(conn.channel()).buildPendingCertRep(request);
+        }
+    }
+
+    public ParseScepSignedAttributesResponse parseScepSignedAttributes(
+            ParseScepSignedAttributesRequest request) throws InterruptedException {
+        try (GrpcConnectionPool.PooledConn conn = pool.acquire()) {
+            return ScepExtServiceGrpc.newBlockingStub(conn.channel()).parseSignedAttributes(request);
+        }
+    }
+
+    public ParseGetCertPkioResponse parseGetCertPkio(ParseGetCertPkioRequest request)
+            throws InterruptedException {
+        try (GrpcConnectionPool.PooledConn conn = pool.acquire()) {
+            return ScepExtServiceGrpc.newBlockingStub(conn.channel()).parseGetCertPkio(request);
+        }
+    }
+
+    public EncodeCertAliasContentResponse encodeCertAliasContent(
+            EncodeCertAliasContentRequest request) throws InterruptedException {
+        try (GrpcConnectionPool.PooledConn conn = pool.acquire()) {
+            return ScepExtServiceGrpc.newBlockingStub(conn.channel()).encodeCertAliasContent(request);
+        }
+    }
+
+    public EncodeScepHttpQueryResponse encodeScepHttpQuery(EncodeScepHttpQueryRequest request)
+            throws InterruptedException {
+        try (GrpcConnectionPool.PooledConn conn = pool.acquire()) {
+            return ScepExtServiceGrpc.newBlockingStub(conn.channel()).encodeScepHttpQuery(request);
         }
     }
 

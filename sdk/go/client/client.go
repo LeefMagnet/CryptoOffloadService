@@ -241,3 +241,63 @@ func (c *Client) BuildScepPendingCertRep(ctx context.Context, req *pb.BuildScepP
 	})
 	return resp, err
 }
+
+// ParseScepSignedAttributes 解析 PKCS#7 SCEP SignedAttributes。
+func (c *Client) ParseScepSignedAttributes(ctx context.Context, req *pb.ParseScepSignedAttributesRequest) (*pb.ParseScepSignedAttributesResponse, error) {
+	var resp *pb.ParseScepSignedAttributesResponse
+	err := c.withConn(ctx, func(conn *pool.Conn) error {
+		cli := pb.NewScepExtServiceClient(conn.GRPC())
+		out, err := cli.ParseSignedAttributes(ctx, req)
+		if err != nil {
+			return err
+		}
+		resp = out
+		return nil
+	})
+	return resp, err
+}
+
+// ParseGetCertPkio 解析 GetCert PKIO（CertAliasOrCn 内层）。
+func (c *Client) ParseGetCertPkio(ctx context.Context, req *pb.ParseGetCertPkioRequest) (*pb.ParseGetCertPkioResponse, error) {
+	var resp *pb.ParseGetCertPkioResponse
+	err := c.withConn(ctx, func(conn *pool.Conn) error {
+		cli := pb.NewScepExtServiceClient(conn.GRPC())
+		out, err := cli.ParseGetCertPkio(ctx, req)
+		if err != nil {
+			return err
+		}
+		resp = out
+		return nil
+	})
+	return resp, err
+}
+
+// EncodeCertAliasContent 编码 CertAliasOrCn / SerialNumber DER。
+func (c *Client) EncodeCertAliasContent(ctx context.Context, req *pb.EncodeCertAliasContentRequest) (*pb.EncodeCertAliasContentResponse, error) {
+	var resp *pb.EncodeCertAliasContentResponse
+	err := c.withConn(ctx, func(conn *pool.Conn) error {
+		cli := pb.NewScepExtServiceClient(conn.GRPC())
+		out, err := cli.EncodeCertAliasContent(ctx, req)
+		if err != nil {
+			return err
+		}
+		resp = out
+		return nil
+	})
+	return resp, err
+}
+
+// EncodeScepHttpQuery 构建 SCEP HTTP query。
+func (c *Client) EncodeScepHttpQuery(ctx context.Context, req *pb.EncodeScepHttpQueryRequest) (*pb.EncodeScepHttpQueryResponse, error) {
+	var resp *pb.EncodeScepHttpQueryResponse
+	err := c.withConn(ctx, func(conn *pool.Conn) error {
+		cli := pb.NewScepExtServiceClient(conn.GRPC())
+		out, err := cli.EncodeScepHttpQuery(ctx, req)
+		if err != nil {
+			return err
+		}
+		resp = out
+		return nil
+	})
+	return resp, err
+}

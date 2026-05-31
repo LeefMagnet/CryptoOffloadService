@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>com.cryptooffload</groupId>
     <artifactId>cryptooffload-sdk</artifactId>
-    <version>0.1.0</version>
+    <version>0.2.0</version>
     <properties>
         <maven.compiler.release>17</maven.compiler.release>
         <grpc.version>1.68.0</grpc.version>

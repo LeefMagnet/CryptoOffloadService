@@ -226,6 +226,7 @@ deploy/                 # Docker / Compose
 - `cryptooffload/v1/sign_service.proto` — 签名/验签
 - `cryptooffload/v1/cms_service.proto` — CMS 操作
 - `cryptooffload/v1/scep_service.proto` — SCEP PKIO / CertRep
+- `cryptooffload/v1/scep_ext_service.proto` — SCEP 自定义扩展（SignedAttributes / CertAliasOrCn / HTTP）
 
 ## 与 ScepAccelerator 的关系
 

@@ -117,38 +117,13 @@ pub fn build_success_certrep(
     )?;
 
     unsafe {
-        ffi::init();
-
-        let p7 = cvt_p(ffi::PKCS7_new()).context("PKCS7_new")?;
-        let p7 = Pkcs7::from_ptr(p7);
-
-        cvt(ffi::PKCS7_set_type(
-            p7.as_ptr(),
-            Nid::PKCS7_SIGNED.as_raw(),
-        ))
-        .context("PKCS7_set_type")?;
-
-        cvt(ffi::PKCS7_add_certificate(p7.as_ptr(), ca_cert.as_ptr()))
-            .context("PKCS7_add_certificate")?;
-
-        let si = ffi::PKCS7_add_signature(
-            p7.as_ptr(),
-            ca_cert.as_ptr(),
-            ca_key.as_ptr(),
-            MessageDigest::sha256().as_ptr(),
-        );
-        if si.is_null() {
-            return Err(anyhow!("PKCS7_add_signature returned null"));
-        }
+        let (p7, si) = new_signed_data_with_signer(ca_cert, ca_key, MessageDigest::sha256())?;
 
         add_printable_attr(si, OID_MESSAGE_TYPE, MSG_TYPE_CERT_REP)?;
         add_printable_attr(si, OID_PKI_STATUS, PKI_STATUS_SUCCESS)?;
         add_printable_attr(si, OID_TRANSACTION_ID, params.transaction_id)?;
         add_octet_attr(si, OID_SENDER_NONCE, sender_nonce)?;
         add_octet_attr(si, OID_RECIPIENT_NONCE, params.recipient_nonce)?;
-
-        cvt(ffi::PKCS7_content_new(p7.as_ptr(), Nid::PKCS7_DATA.as_raw()))
-            .context("PKCS7_content_new")?;
 
         // dataInit → BIO_write → dataFinal；dataFinal 不释放 chain，须 BIO_free_all（否则每请求泄漏）。
         pkcs7_finalize_content(p7.as_ptr(), Some(&enveloped_der))
@@ -197,38 +172,13 @@ pub fn build_gm_success_certrep(
     let sign_md = ca_message_digest(ca_key);
 
     unsafe {
-        ffi::init();
-
-        let p7 = cvt_p(ffi::PKCS7_new()).context("PKCS7_new")?;
-        let p7 = Pkcs7::from_ptr(p7);
-
-        cvt(ffi::PKCS7_set_type(
-            p7.as_ptr(),
-            Nid::PKCS7_SIGNED.as_raw(),
-        ))
-        .context("PKCS7_set_type")?;
-
-        cvt(ffi::PKCS7_add_certificate(p7.as_ptr(), ca_cert.as_ptr()))
-            .context("PKCS7_add_certificate")?;
-
-        let si = ffi::PKCS7_add_signature(
-            p7.as_ptr(),
-            ca_cert.as_ptr(),
-            ca_key.as_ptr(),
-            sign_md.as_ptr(),
-        );
-        if si.is_null() {
-            return Err(anyhow!("PKCS7_add_signature returned null"));
-        }
+        let (p7, si) = new_signed_data_with_signer(ca_cert, ca_key, sign_md)?;
 
         add_printable_attr(si, OID_MESSAGE_TYPE, MSG_TYPE_CERT_REP)?;
         add_printable_attr(si, OID_PKI_STATUS, PKI_STATUS_SUCCESS)?;
         add_printable_attr(si, OID_TRANSACTION_ID, params.transaction_id)?;
         add_octet_attr(si, OID_SENDER_NONCE, sender_nonce)?;
         add_octet_attr(si, OID_RECIPIENT_NONCE, params.recipient_nonce)?;
-
-        cvt(ffi::PKCS7_content_new(p7.as_ptr(), Nid::PKCS7_DATA.as_raw()))
-            .context("PKCS7_content_new")?;
 
         pkcs7_finalize_content(p7.as_ptr(), Some(&enveloped_der))
             .context("attach enveloped content to GM CertRep")?;
@@ -376,29 +326,7 @@ pub fn build_failure_certrep(
     let fail_info_str = params.fail_info.to_string();
 
     unsafe {
-        ffi::init();
-
-        let p7 = cvt_p(ffi::PKCS7_new()).context("PKCS7_new")?;
-        let p7 = Pkcs7::from_ptr(p7);
-
-        cvt(ffi::PKCS7_set_type(
-            p7.as_ptr(),
-            Nid::PKCS7_SIGNED.as_raw(),
-        ))
-        .context("PKCS7_set_type")?;
-
-        cvt(ffi::PKCS7_add_certificate(p7.as_ptr(), ca_cert.as_ptr()))
-            .context("PKCS7_add_certificate")?;
-
-        let si = ffi::PKCS7_add_signature(
-            p7.as_ptr(),
-            ca_cert.as_ptr(),
-            ca_key.as_ptr(),
-            MessageDigest::sha256().as_ptr(),
-        );
-        if si.is_null() {
-            return Err(anyhow!("PKCS7_add_signature returned null"));
-        }
+        let (p7, si) = new_signed_data_with_signer(ca_cert, ca_key, MessageDigest::sha256())?;
 
         add_printable_attr(si, OID_MESSAGE_TYPE, MSG_TYPE_CERT_REP)?;
         add_printable_attr(si, OID_PKI_STATUS, PKI_STATUS_FAILURE)?;
@@ -407,9 +335,6 @@ pub fn build_failure_certrep(
         add_octet_attr(si, OID_SENDER_NONCE, sender_nonce)?;
         add_octet_attr(si, OID_RECIPIENT_NONCE, params.recipient_nonce)?;
         add_utf8_attr(si, OID_FAIL_INFO_TEXT, params.fail_info_text)?;
-
-        cvt(ffi::PKCS7_content_new(p7.as_ptr(), Nid::PKCS7_DATA.as_raw()))
-            .context("PKCS7_content_new")?;
 
         pkcs7_finalize_content(p7.as_ptr(), None).context("finalize failure CertRep")?;
 
@@ -438,29 +363,7 @@ pub fn build_pending_certrep(
     };
 
     unsafe {
-        ffi::init();
-
-        let p7 = cvt_p(ffi::PKCS7_new()).context("PKCS7_new")?;
-        let p7 = Pkcs7::from_ptr(p7);
-
-        cvt(ffi::PKCS7_set_type(
-            p7.as_ptr(),
-            Nid::PKCS7_SIGNED.as_raw(),
-        ))
-        .context("PKCS7_set_type")?;
-
-        cvt(ffi::PKCS7_add_certificate(p7.as_ptr(), ca_cert.as_ptr()))
-            .context("PKCS7_add_certificate")?;
-
-        let si = ffi::PKCS7_add_signature(
-            p7.as_ptr(),
-            ca_cert.as_ptr(),
-            ca_key.as_ptr(),
-            MessageDigest::sha256().as_ptr(),
-        );
-        if si.is_null() {
-            return Err(anyhow!("PKCS7_add_signature returned null"));
-        }
+        let (p7, si) = new_signed_data_with_signer(ca_cert, ca_key, MessageDigest::sha256())?;
 
         add_printable_attr(si, OID_MESSAGE_TYPE, MSG_TYPE_CERT_REP)?;
         add_printable_attr(si, OID_PKI_STATUS, PKI_STATUS_PENDING)?;
@@ -468,13 +371,35 @@ pub fn build_pending_certrep(
         add_octet_attr(si, OID_SENDER_NONCE, sender_nonce)?;
         add_octet_attr(si, OID_RECIPIENT_NONCE, params.recipient_nonce)?;
 
-        cvt(ffi::PKCS7_content_new(p7.as_ptr(), Nid::PKCS7_DATA.as_raw()))
-            .context("PKCS7_content_new")?;
-
         pkcs7_finalize_content(p7.as_ptr(), None).context("finalize pending CertRep")?;
 
         p7.to_der().context("encode pending CertRep DER")
     }
+}
+
+/// 统一构建外层 SignedData + signer，收敛 FFI 所有权与空指针检查边界。
+unsafe fn new_signed_data_with_signer(
+    ca_cert: &X509Ref,
+    ca_key: &PKeyRef<Private>,
+    digest: MessageDigest,
+) -> Result<(Pkcs7, *mut ffi::PKCS7_SIGNER_INFO)> {
+    ffi::init();
+    let p7 = cvt_p(ffi::PKCS7_new()).context("PKCS7_new")?;
+    let p7 = Pkcs7::from_ptr(p7);
+
+    cvt(ffi::PKCS7_set_type(p7.as_ptr(), Nid::PKCS7_SIGNED.as_raw())).context("PKCS7_set_type")?;
+    cvt(ffi::PKCS7_add_certificate(p7.as_ptr(), ca_cert.as_ptr())).context("PKCS7_add_certificate")?;
+    let si = ffi::PKCS7_add_signature(
+        p7.as_ptr(),
+        ca_cert.as_ptr(),
+        ca_key.as_ptr(),
+        digest.as_ptr(),
+    );
+    if si.is_null() {
+        return Err(anyhow!("PKCS7_add_signature returned null"));
+    }
+    cvt(ffi::PKCS7_content_new(p7.as_ptr(), Nid::PKCS7_DATA.as_raw())).context("PKCS7_content_new")?;
+    Ok((p7, si))
 }
 
 /// PKCS7_dataInit 返回的 BIO 链在 PKCS7_dataFinal 之后**不会**自动释放，必须 BIO_free_all。

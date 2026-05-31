@@ -9,6 +9,8 @@ pub mod scep_certrep;
 pub mod scep_envelope;
 pub mod scep_pkio;
 pub mod scep_signed_attrs;
+mod service_errors;
+mod service_validators;
 pub mod services;
 
 pub mod cryptooffload {

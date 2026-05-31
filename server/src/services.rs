@@ -14,10 +14,13 @@ use crate::pb::scep_ext_service_server::ScepExtService;
 use crate::pb::scep_service_server::ScepService;
 use crate::pb::sign_service_server::SignService;
 use crate::pb::*;
+use crate::service_errors::{map_crypto_err, map_key_store_err};
+use crate::service_validators::{
+    ensure_small_packet, validate_cms_build_request,
+    validate_scep_failure_request, validate_scep_gm_success_request,
+    validate_scep_pending_request, validate_scep_success_request,
+};
 
-const MAX_SMALL_PACKET: usize = 1024 * 1024;
-const CMS_CONTENT_TYPE_UNSPECIFIED: i32 = 0;
-const CMS_CONTENT_TYPE_DATA: i32 = 1;
 
 pub struct AppState {
     pub keys: KeyStore,
@@ -84,15 +87,6 @@ impl ScepExtServiceImpl {
     }
 }
 
-fn validate_cms_content_type(content_type: i32) -> Result<(), Status> {
-    if content_type == CMS_CONTENT_TYPE_UNSPECIFIED || content_type == CMS_CONTENT_TYPE_DATA {
-        return Ok(());
-    }
-    Err(Status::invalid_argument(
-        "unsupported content_type: only CMS_CONTENT_TYPE_DATA is supported",
-    ))
-}
-
 async fn run_crypto<T, F>(state: &Arc<AppState>, f: F) -> Result<T, Status>
 where
     T: Send + 'static,
@@ -121,9 +115,8 @@ impl KeyService for KeyServiceImpl {
         request: Request<ImportKeyRequest>,
     ) -> Result<Response<ImportKeyResponse>, Status> {
         let req = request.into_inner();
-        if req.key_data.len() > MAX_SMALL_PACKET || req.certificate_data.len() > MAX_SMALL_PACKET {
-            return Err(Status::invalid_argument("key or certificate data too large"));
-        }
+        ensure_small_packet("key_data", &req.key_data)?;
+        ensure_small_packet("certificate_data", &req.certificate_data)?;
         let metadata = self
             .state
             .keys
@@ -190,9 +183,7 @@ impl SignService for SignServiceImpl {
         request: Request<SignRequest>,
     ) -> Result<Response<SignResponse>, Status> {
         let req = request.into_inner();
-        if req.data.len() > MAX_SMALL_PACKET {
-            return Err(Status::invalid_argument("data too large"));
-        }
+        ensure_small_packet("data", &req.data)?;
         let access = self
             .state
             .keys
@@ -219,9 +210,8 @@ impl SignService for SignServiceImpl {
         request: Request<VerifyRequest>,
     ) -> Result<Response<VerifyResponse>, Status> {
         let req = request.into_inner();
-        if req.data.len() > MAX_SMALL_PACKET || req.signature.len() > MAX_SMALL_PACKET {
-            return Err(Status::invalid_argument("data or signature too large"));
-        }
+        ensure_small_packet("data", &req.data)?;
+        ensure_small_packet("signature", &req.signature)?;
         let access = self
             .state
             .keys
@@ -254,9 +244,7 @@ impl CmsService for CmsServiceImpl {
         request: Request<ParseCmsRequest>,
     ) -> Result<Response<ParseCmsResponse>, Status> {
         let req = request.into_inner();
-        if req.cms_der.len() > MAX_SMALL_PACKET {
-            return Err(Status::invalid_argument("cms_der too large"));
-        }
+        ensure_small_packet("cms_der", &req.cms_der)?;
         let access = if req.decrypt_key_id.is_empty() {
             None
         } else {
@@ -282,15 +270,7 @@ impl CmsService for CmsServiceImpl {
         request: Request<BuildCmsRequest>,
     ) -> Result<Response<BuildCmsResponse>, Status> {
         let req = request.into_inner();
-        validate_cms_content_type(req.content_type)?;
-        if req.content.len() > MAX_SMALL_PACKET {
-            return Err(Status::invalid_argument("content too large"));
-        }
-        for cert in &req.extra_certificates {
-            if cert.len() > MAX_SMALL_PACKET {
-                return Err(Status::invalid_argument("extra certificate too large"));
-            }
-        }
+        validate_cms_build_request(&req)?;
         let access = self
             .state
             .keys
@@ -312,9 +292,8 @@ impl CmsService for CmsServiceImpl {
         request: Request<VerifyCmsRequest>,
     ) -> Result<Response<VerifyCmsResponse>, Status> {
         let req = request.into_inner();
-        if req.cms_der.len() > MAX_SMALL_PACKET || req.content.len() > MAX_SMALL_PACKET {
-            return Err(Status::invalid_argument("cms_der or content too large"));
-        }
+        ensure_small_packet("cms_der", &req.cms_der)?;
+        ensure_small_packet("content", &req.content)?;
         let access = self
             .state
             .keys
@@ -337,9 +316,7 @@ impl ScepService for ScepServiceImpl {
         request: Request<ParseScepRequestRequest>,
     ) -> Result<Response<ParseScepRequestResponse>, Status> {
         let req = request.into_inner();
-        if req.scep_der.len() > MAX_SMALL_PACKET {
-            return Err(Status::invalid_argument("scep_der too large"));
-        }
+        ensure_small_packet("scep_der", &req.scep_der)?;
         let access = self
             .state
             .keys
@@ -361,22 +338,7 @@ impl ScepService for ScepServiceImpl {
         request: Request<BuildScepSuccessCertRepRequest>,
     ) -> Result<Response<BuildScepCertRepResponse>, Status> {
         let req = request.into_inner();
-        for blob in [
-            &req.recipient_nonce,
-            &req.sender_nonce,
-            &req.issued_cert_der,
-            &req.wrapper_cert_der,
-        ] {
-            if blob.len() > MAX_SMALL_PACKET {
-                return Err(Status::invalid_argument("SCEP request field too large"));
-            }
-        }
-        if req.transaction_id.is_empty() {
-            return Err(Status::invalid_argument("transaction_id is required"));
-        }
-        if req.recipient_nonce.is_empty() {
-            return Err(Status::invalid_argument("recipient_nonce is required"));
-        }
+        validate_scep_success_request(&req)?;
         let access = self
             .state
             .keys
@@ -410,33 +372,7 @@ impl ScepService for ScepServiceImpl {
         request: Request<BuildScepGmSuccessCertRepRequest>,
     ) -> Result<Response<BuildScepCertRepResponse>, Status> {
         let req = request.into_inner();
-        for blob in [
-            &req.recipient_nonce,
-            &req.sender_nonce,
-            &req.sign_cert_der,
-            &req.encryption_cert_der,
-            &req.skf_content,
-            &req.wrapper_cert_der,
-        ] {
-            if blob.len() > MAX_SMALL_PACKET {
-                return Err(Status::invalid_argument("SCEP request field too large"));
-            }
-        }
-        if req.transaction_id.is_empty() {
-            return Err(Status::invalid_argument("transaction_id is required"));
-        }
-        if req.recipient_nonce.is_empty() {
-            return Err(Status::invalid_argument("recipient_nonce is required"));
-        }
-        if req.sign_cert_der.is_empty() || req.encryption_cert_der.is_empty() {
-            return Err(Status::invalid_argument("sign_cert_der and encryption_cert_der are required"));
-        }
-        if req.skf_content.is_empty() {
-            return Err(Status::invalid_argument("skf_content is required"));
-        }
-        if req.wrapper_cert_der.is_empty() {
-            return Err(Status::invalid_argument("wrapper_cert_der is required"));
-        }
+        validate_scep_gm_success_request(&req)?;
         let access = self
             .state
             .keys
@@ -474,23 +410,7 @@ impl ScepService for ScepServiceImpl {
         request: Request<BuildScepFailureCertRepRequest>,
     ) -> Result<Response<BuildScepCertRepResponse>, Status> {
         let req = request.into_inner();
-        for blob in [&req.recipient_nonce, &req.sender_nonce] {
-            if blob.len() > MAX_SMALL_PACKET {
-                return Err(Status::invalid_argument("SCEP request field too large"));
-            }
-        }
-        if req.transaction_id.is_empty() {
-            return Err(Status::invalid_argument("transaction_id is required"));
-        }
-        if req.recipient_nonce.is_empty() {
-            return Err(Status::invalid_argument("recipient_nonce is required"));
-        }
-        if req.fail_info_text.is_empty() {
-            return Err(Status::invalid_argument("fail_info_text is required"));
-        }
-        if req.fail_info > 4 {
-            return Err(Status::invalid_argument("fail_info must be 0..=4"));
-        }
+        validate_scep_failure_request(&req)?;
         let access = self
             .state
             .keys
@@ -522,17 +442,7 @@ impl ScepService for ScepServiceImpl {
         request: Request<BuildScepPendingCertRepRequest>,
     ) -> Result<Response<BuildScepCertRepResponse>, Status> {
         let req = request.into_inner();
-        for blob in [&req.recipient_nonce, &req.sender_nonce] {
-            if blob.len() > MAX_SMALL_PACKET {
-                return Err(Status::invalid_argument("SCEP request field too large"));
-            }
-        }
-        if req.transaction_id.is_empty() {
-            return Err(Status::invalid_argument("transaction_id is required"));
-        }
-        if req.recipient_nonce.is_empty() {
-            return Err(Status::invalid_argument("recipient_nonce is required"));
-        }
+        validate_scep_pending_request(&req)?;
         let access = self
             .state
             .keys
@@ -563,9 +473,7 @@ impl ScepExtService for ScepExtServiceImpl {
         request: Request<ParseScepSignedAttributesRequest>,
     ) -> Result<Response<ParseScepSignedAttributesResponse>, Status> {
         let req = request.into_inner();
-        if req.pkcs7_der.len() > MAX_SMALL_PACKET {
-            return Err(Status::invalid_argument("pkcs7_der too large"));
-        }
+        ensure_small_packet("pkcs7_der", &req.pkcs7_der)?;
         let pkcs7_der = req.pkcs7_der;
         let state = self.state.clone();
         let attributes = run_crypto(&state, move || {
@@ -582,9 +490,7 @@ impl ScepExtService for ScepExtServiceImpl {
         request: Request<ParseGetCertPkioRequest>,
     ) -> Result<Response<ParseGetCertPkioResponse>, Status> {
         let req = request.into_inner();
-        if req.scep_der.len() > MAX_SMALL_PACKET {
-            return Err(Status::invalid_argument("scep_der too large"));
-        }
+        ensure_small_packet("scep_der", &req.scep_der)?;
         let access = self
             .state
             .keys
@@ -604,9 +510,7 @@ impl ScepExtService for ScepExtServiceImpl {
         request: Request<ParseEnrollPkioRequest>,
     ) -> Result<Response<ParseEnrollPkioResponse>, Status> {
         let req = request.into_inner();
-        if req.scep_der.len() > MAX_SMALL_PACKET {
-            return Err(Status::invalid_argument("scep_der too large"));
-        }
+        ensure_small_packet("scep_der", &req.scep_der)?;
         let access = self
             .state
             .keys
@@ -626,9 +530,7 @@ impl ScepExtService for ScepExtServiceImpl {
         request: Request<EncodeCertAliasContentRequest>,
     ) -> Result<Response<EncodeCertAliasContentResponse>, Status> {
         let req = request.into_inner();
-        if req.value.len() > MAX_SMALL_PACKET {
-            return Err(Status::invalid_argument("value too large"));
-        }
+        ensure_small_packet("value", req.value.as_bytes())?;
         let content_type = req.content_type;
         let value = req.value;
         let state = self.state.clone();
@@ -644,9 +546,7 @@ impl ScepExtService for ScepExtServiceImpl {
         request: Request<DecodeCertAliasContentRequest>,
     ) -> Result<Response<DecodeCertAliasContentResponse>, Status> {
         let req = request.into_inner();
-        if req.content_der.len() > MAX_SMALL_PACKET {
-            return Err(Status::invalid_argument("content_der too large"));
-        }
+        ensure_small_packet("content_der", &req.content_der)?;
         let content_der = req.content_der;
         let state = self.state.clone();
         let (content_type, alias_or_cn, serial_number_hex) =
@@ -659,17 +559,4 @@ impl ScepExtService for ScepExtServiceImpl {
         }))
     }
 
-}
-
-fn map_key_store_err(err: anyhow::Error) -> Status {
-    let msg = err.to_string();
-    if msg.contains("lock poisoned") {
-        Status::unavailable(msg)
-    } else {
-        Status::invalid_argument(msg)
-    }
-}
-
-fn map_crypto_err(err: anyhow::Error) -> Status {
-    Status::invalid_argument(err.to_string())
 }

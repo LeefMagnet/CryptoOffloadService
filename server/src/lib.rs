@@ -6,6 +6,7 @@ pub mod key_store;
 pub mod openssl_init;
 pub mod scep_cert_alias;
 pub mod scep_certrep;
+pub mod scep_envelope;
 pub mod scep_pkio;
 pub mod scep_signed_attrs;
 pub mod services;

@@ -6,7 +6,7 @@ use openssl::error::ErrorStack;
 use openssl::hash::MessageDigest;
 use openssl::nid::Nid;
 use openssl::pkcs7::{Pkcs7, Pkcs7Flags};
-use openssl::pkey::{PKeyRef, Private};
+use openssl::pkey::{Id, PKeyRef, Private};
 use openssl::rand::rand_bytes;
 use openssl::stack::Stack;
 use openssl::symm::Cipher;
@@ -44,6 +44,24 @@ pub struct ScepSuccessParams<'a> {
     pub wrapper_cert: &'a X509Ref,
     /// SCEP CA（RSA），与 Go `rsaEncryptRecipients` 一致：Ed25519 wrapper 时加密给 CA
     pub ca_cert: &'a X509Ref,
+    /// `ScepEnvelopeCipher` 整型值（0–5，与 smallstep/pkcs7 ContentEncryptionAlgorithm 对齐）
+    pub envelope_cipher: i32,
+}
+
+/// 国密 SUCCESS CertRep：内层双证 + SKF Base64；外层 EnvelopedData 算法可选。
+#[derive(Clone, Copy)]
+pub struct ScepGmSuccessParams<'a> {
+    pub transaction_id: &'a str,
+    pub recipient_nonce: &'a [u8],
+    pub sender_nonce: &'a [u8],
+    pub sign_cert: &'a X509Ref,
+    pub encryption_cert: &'a X509Ref,
+    /// SKF 密钥对密文（Base64 ASCII 字符串字节，写入内层 id-data eContent）
+    pub skf_content: &'a [u8],
+    pub wrapper_cert: &'a X509Ref,
+    pub ca_cert: &'a X509Ref,
+    /// `ScepEnvelopeCipher` 整型值（0–5，与 smallstep/pkcs7 ContentEncryptionAlgorithm 对齐）
+    pub envelope_cipher: i32,
 }
 
 /// PENDING CertRep 参数（pkiStatus=3，无 failInfo / EnvelopedData）
@@ -90,8 +108,13 @@ pub fn build_success_certrep(
     };
 
     let degenerate_der = build_degenerate_certificate_der(params.issued_cert)?;
-    let enveloped_der =
-        encrypt_envelope(params.wrapper_cert, params.ca_cert, &degenerate_der)?;
+    let cipher = resolve_envelope_cipher(params.envelope_cipher)?;
+    let enveloped_der = encrypt_envelope_with_cipher(
+        params.wrapper_cert,
+        params.ca_cert,
+        &degenerate_der,
+        cipher,
+    )?;
 
     unsafe {
         ffi::init();
@@ -132,6 +155,120 @@ pub fn build_success_certrep(
             .context("attach enveloped content to CertRep")?;
 
         p7.to_der().context("encode success CertRep DER")
+    }
+}
+
+pub fn build_gm_success_certrep(
+    ca_cert: &X509Ref,
+    ca_key: &PKeyRef<Private>,
+    params: ScepGmSuccessParams<'_>,
+) -> Result<Vec<u8>> {
+    if params.transaction_id.is_empty() {
+        return Err(anyhow!("transaction_id must not be empty"));
+    }
+    if params.recipient_nonce.is_empty() {
+        return Err(anyhow!("recipient_nonce must not be empty"));
+    }
+    if params.skf_content.is_empty() {
+        return Err(anyhow!("skf_content must not be empty"));
+    }
+
+    let mut sender_nonce_buf = [0u8; 16];
+    let sender_nonce = if params.sender_nonce.is_empty() {
+        rand_bytes(&mut sender_nonce_buf).context("failed to generate sender nonce")?;
+        sender_nonce_buf.as_slice()
+    } else {
+        params.sender_nonce
+    };
+
+    let inner_der = build_gm_inner_signed_data(
+        params.sign_cert,
+        params.encryption_cert,
+        params.skf_content,
+    )?;
+    let cipher = resolve_envelope_cipher(params.envelope_cipher)?;
+    let enveloped_der = encrypt_envelope_with_cipher(
+        params.wrapper_cert,
+        params.ca_cert,
+        &inner_der,
+        cipher,
+    )?;
+
+    let sign_md = ca_message_digest(ca_key);
+
+    unsafe {
+        ffi::init();
+
+        let p7 = cvt_p(ffi::PKCS7_new()).context("PKCS7_new")?;
+        let p7 = Pkcs7::from_ptr(p7);
+
+        cvt(ffi::PKCS7_set_type(
+            p7.as_ptr(),
+            Nid::PKCS7_SIGNED.as_raw(),
+        ))
+        .context("PKCS7_set_type")?;
+
+        cvt(ffi::PKCS7_add_certificate(p7.as_ptr(), ca_cert.as_ptr()))
+            .context("PKCS7_add_certificate")?;
+
+        let si = ffi::PKCS7_add_signature(
+            p7.as_ptr(),
+            ca_cert.as_ptr(),
+            ca_key.as_ptr(),
+            sign_md.as_ptr(),
+        );
+        if si.is_null() {
+            return Err(anyhow!("PKCS7_add_signature returned null"));
+        }
+
+        add_printable_attr(si, OID_MESSAGE_TYPE, MSG_TYPE_CERT_REP)?;
+        add_printable_attr(si, OID_PKI_STATUS, PKI_STATUS_SUCCESS)?;
+        add_printable_attr(si, OID_TRANSACTION_ID, params.transaction_id)?;
+        add_octet_attr(si, OID_SENDER_NONCE, sender_nonce)?;
+        add_octet_attr(si, OID_RECIPIENT_NONCE, params.recipient_nonce)?;
+
+        cvt(ffi::PKCS7_content_new(p7.as_ptr(), Nid::PKCS7_DATA.as_raw()))
+            .context("PKCS7_content_new")?;
+
+        pkcs7_finalize_content(p7.as_ptr(), Some(&enveloped_der))
+            .context("attach enveloped content to GM CertRep")?;
+
+        p7.to_der().context("encode GM success CertRep DER")
+    }
+}
+
+/// 国密内层 SignedData：certificates[0]=签名证，certificates[1]=加密证；eContent=SKF Base64 字符串。
+pub fn build_gm_inner_signed_data(
+    sign_cert: &X509Ref,
+    enc_cert: &X509Ref,
+    skf_content: &[u8],
+) -> Result<Vec<u8>> {
+    unsafe {
+        ffi::init();
+        let p7 = cvt_p(ffi::PKCS7_new()).context("PKCS7_new")?;
+        let p7 = Pkcs7::from_ptr(p7);
+        cvt(ffi::PKCS7_set_type(
+            p7.as_ptr(),
+            Nid::PKCS7_SIGNED.as_raw(),
+        ))
+        .context("PKCS7_set_type")?;
+        cvt(ffi::PKCS7_add_certificate(p7.as_ptr(), sign_cert.as_ptr()))
+            .context("PKCS7_add_certificate sign")?;
+        cvt(ffi::PKCS7_add_certificate(p7.as_ptr(), enc_cert.as_ptr()))
+            .context("PKCS7_add_certificate enc")?;
+        cvt(ffi::PKCS7_content_new(p7.as_ptr(), Nid::PKCS7_DATA.as_raw()))
+            .context("PKCS7_content_new")?;
+        pkcs7_finalize_content(p7.as_ptr(), Some(skf_content))
+            .context("finalize GM inner SignedData content")?;
+        p7.to_der().context("encode GM inner SignedData DER")
+    }
+}
+
+fn ca_message_digest(ca_key: &PKeyRef<Private>) -> MessageDigest {
+    if ca_key.id() == Id::SM2 {
+        MessageDigest::sm3()
+    } else {
+        MessageDigest::sha256()
     }
 }
 
@@ -179,15 +316,34 @@ fn rsa_encrypt_recipient_stack(wrapper: &X509Ref, ca_cert: &X509Ref) -> Result<S
     Ok(recipients)
 }
 
-fn encrypt_envelope(wrapper: &X509Ref, ca_cert: &X509Ref, plaintext: &[u8]) -> Result<Vec<u8>> {
+/// 与 smallstep/pkcs7 `ContentEncryptionAlgorithm`（0–4）及 SCEP 扩展 3DES（5）对齐。
+fn resolve_envelope_cipher(v: i32) -> Result<Cipher> {
+    match v {
+        0 => Ok(Cipher::des_cbc()),
+        1 => Ok(Cipher::aes_128_cbc()),
+        2 => Ok(Cipher::aes_256_cbc()),
+        3 => Ok(Cipher::aes_128_gcm()),
+        4 => Ok(Cipher::aes_256_gcm()),
+        5 => Ok(Cipher::des_ede3_cbc()),
+        _ => Err(anyhow!(
+            "unsupported envelope_cipher value: {v} (valid: 0=DES-CBC, 1=AES-128-CBC, \
+             2=AES-256-CBC, 3=AES-128-GCM, 4=AES-256-GCM, 5=3DES-CBC)"
+        )),
+    }
+}
+
+fn encrypt_envelope_with_cipher(
+    wrapper: &X509Ref,
+    ca_cert: &X509Ref,
+    plaintext: &[u8],
+    cipher: Cipher,
+) -> Result<Vec<u8>> {
     let recipients = rsa_encrypt_recipient_stack(wrapper, ca_cert)?;
-    let enveloped = Pkcs7::encrypt(
-        &recipients,
-        plaintext,
-        Cipher::des_ede3_cbc(),
-        Pkcs7Flags::BINARY,
-    )
-    .context("PKCS7 encrypt degenerate cert")?;
+    if cipher == Cipher::aes_128_gcm() || cipher == Cipher::aes_256_gcm() {
+        return crate::scep_envelope::encrypt_envelope_aes_gcm(&recipients, plaintext, cipher);
+    }
+    let enveloped = Pkcs7::encrypt(&recipients, plaintext, cipher, Pkcs7Flags::BINARY)
+        .context("PKCS7 encrypt CertRep envelope")?;
     enveloped.to_der().context("encode enveloped PKCS7")
 }
 

@@ -124,6 +124,13 @@ class Client:
             return stub.BuildSuccessCertRep(req)
         return self._call(run)
 
+    def build_scep_gm_success_cert_rep(self, **kwargs):
+        req = scep_service_pb2.BuildScepGmSuccessCertRepRequest(**kwargs)
+        def run(conn: Conn):
+            stub = scep_service_pb2_grpc.ScepServiceStub(conn.channel)
+            return stub.BuildGmSuccessCertRep(req)
+        return self._call(run)
+
     def build_scep_failure_cert_rep(self, **kwargs):
         req = scep_service_pb2.BuildScepFailureCertRepRequest(**kwargs)
         def run(conn: Conn):

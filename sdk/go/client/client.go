@@ -224,6 +224,21 @@ func (c *Client) BuildScepSuccessCertRep(ctx context.Context, req *pb.BuildScepS
 	return resp, err
 }
 
+// BuildScepGmSuccessCertRep 构建国密 SUCCESS CertRep（双证 + SKF Base64；envelope_cipher 同 BuildSuccessCertRep）。
+func (c *Client) BuildScepGmSuccessCertRep(ctx context.Context, req *pb.BuildScepGmSuccessCertRepRequest) (*pb.BuildScepCertRepResponse, error) {
+	var resp *pb.BuildScepCertRepResponse
+	err := c.withConn(ctx, func(conn *pool.Conn) error {
+		cli := pb.NewScepServiceClient(conn.GRPC())
+		out, err := cli.BuildGmSuccessCertRep(ctx, req)
+		if err != nil {
+			return err
+		}
+		resp = out
+		return nil
+	})
+	return resp, err
+}
+
 // BuildScepFailureCertRep 构建 SCEP FAILURE CertRep。
 func (c *Client) BuildScepFailureCertRep(ctx context.Context, req *pb.BuildScepFailureCertRepRequest) (*pb.BuildScepCertRepResponse, error) {
 	var resp *pb.BuildScepCertRepResponse

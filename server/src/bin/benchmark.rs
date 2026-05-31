@@ -31,6 +31,10 @@ use cryptooffload::v1::{
     ParseScepRequestRequest, SignAlgorithm, SignRequest, VerifyCmsRequest, VerifyRequest,
 };
 
+const ENVELOPE_DES_CBC: i32 = 0;
+const ENVELOPE_AES128_CBC: i32 = 1;
+const ENVELOPE_AES256_CBC: i32 = 2;
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum BenchMode {
     ImportKey,
@@ -47,8 +51,15 @@ enum BenchMode {
     CmsParse,
     CmsVerify,
     CmsBuildParse,
-    /// SCEP SUCCESS CertRep（pkiStatus=0，含 3DES Envelop）
-    ScepCertrepSuccess,
+    /// SCEP SUCCESS CertRep，DES-CBC Envelop（smallstep 默认；同 `scep-certrep-success`）
+    #[value(name = "scep-certrep-success")]
+    ScepCertrepSuccessDesCbc,
+    /// SCEP SUCCESS CertRep，AES-128-CBC Envelop（RFC 8894 推荐）
+    #[value(name = "scep-certrep-success-aes128-cbc")]
+    ScepCertrepSuccessAes128Cbc,
+    /// SCEP SUCCESS CertRep，AES-256-CBC Envelop（step-ca 推荐）
+    #[value(name = "scep-certrep-success-aes256-cbc")]
+    ScepCertrepSuccessAes256Cbc,
     /// SCEP FAILURE CertRep（pkiStatus=2，无 Envelop）
     ScepCertrepFailure,
     /// SCEP PENDING CertRep（pkiStatus=3，待人工审批，无 Envelop）
@@ -334,15 +345,15 @@ async fn prepare_keys(channel: &Channel, args: &Args, payload: &[u8]) -> Result<
     .await?;
 
     let recipient_nonce = vec![0x01, 0x02, 0x03, 0x04];
+    let scep_success_req = scep_success_certrep_request(
+        &ca_meta.key_id,
+        &recipient_nonce,
+        &issued_cert_der,
+        &pkio_wrapper_cert_der,
+        ENVELOPE_DES_CBC,
+    );
     let scep_success_certrep_der = scep_client
-        .build_success_cert_rep(BuildScepSuccessCertRepRequest {
-            ca_key_id: ca_meta.key_id.clone(),
-            transaction_id: "bench-tx-success".into(),
-            recipient_nonce: recipient_nonce.clone(),
-            issued_cert_der: issued_cert_der.clone(),
-            wrapper_cert_der: pkio_wrapper_cert_der.clone(),
-            ..Default::default()
-        })
+        .build_success_cert_rep(scep_success_req)
         .await?
         .into_inner()
         .certrep_der;
@@ -688,17 +699,14 @@ async fn run_one(channel: &Channel, mode: BenchMode, keys: &BenchKeys) -> Result
                 })
                 .await?;
         }
-        BenchMode::ScepCertrepSuccess => {
-            ScepServiceClient::new(channel.clone())
-                .build_success_cert_rep(BuildScepSuccessCertRepRequest {
-                    ca_key_id: keys.ca_key_id.clone(),
-                    transaction_id: "bench-tx-success".into(),
-                    recipient_nonce: keys.recipient_nonce.clone(),
-                    issued_cert_der: keys.issued_cert_der.clone(),
-                    wrapper_cert_der: keys.wrapper_cert_der.clone(),
-                    ..Default::default()
-                })
-                .await?;
+        BenchMode::ScepCertrepSuccessDesCbc => {
+            scep_build_success_certrep(channel, keys, ENVELOPE_DES_CBC).await?;
+        }
+        BenchMode::ScepCertrepSuccessAes128Cbc => {
+            scep_build_success_certrep(channel, keys, ENVELOPE_AES128_CBC).await?;
+        }
+        BenchMode::ScepCertrepSuccessAes256Cbc => {
+            scep_build_success_certrep(channel, keys, ENVELOPE_AES256_CBC).await?;
         }
         BenchMode::ScepCertrepFailure => {
             ScepServiceClient::new(channel.clone())
@@ -749,18 +757,52 @@ async fn run_one(channel: &Channel, mode: BenchMode, keys: &BenchKeys) -> Result
                 .await?
                 .into_inner();
             let _ = scep
-                .build_success_cert_rep(BuildScepSuccessCertRepRequest {
-                    ca_key_id: keys.ca_key_id.clone(),
-                    transaction_id: "bench-tx-parse-build".into(),
-                    recipient_nonce: keys.recipient_nonce.clone(),
-                    issued_cert_der: keys.issued_cert_der.clone(),
-                    wrapper_cert_der: parsed.wrapper_cert_der,
-                    ..Default::default()
-                })
+                .build_success_cert_rep(scep_success_certrep_request(
+                    &keys.ca_key_id,
+                    &keys.recipient_nonce,
+                    &keys.issued_cert_der,
+                    &parsed.wrapper_cert_der,
+                    ENVELOPE_DES_CBC,
+                ))
                 .await?;
         }
     }
     Ok(())
+}
+
+async fn scep_build_success_certrep(
+    channel: &Channel,
+    keys: &BenchKeys,
+    envelope_cipher: i32,
+) -> Result<()> {
+    ScepServiceClient::new(channel.clone())
+        .build_success_cert_rep(scep_success_certrep_request(
+            &keys.ca_key_id,
+            &keys.recipient_nonce,
+            &keys.issued_cert_der,
+            &keys.wrapper_cert_der,
+            envelope_cipher,
+        ))
+        .await?;
+    Ok(())
+}
+
+fn scep_success_certrep_request(
+    ca_key_id: &str,
+    recipient_nonce: &[u8],
+    issued_cert_der: &[u8],
+    wrapper_cert_der: &[u8],
+    envelope_cipher: i32,
+) -> BuildScepSuccessCertRepRequest {
+    BuildScepSuccessCertRepRequest {
+        ca_key_id: ca_key_id.to_string(),
+        transaction_id: format!("bench-tx-success-{envelope_cipher}"),
+        recipient_nonce: recipient_nonce.to_vec(),
+        issued_cert_der: issued_cert_der.to_vec(),
+        wrapper_cert_der: wrapper_cert_der.to_vec(),
+        envelope_cipher,
+        ..Default::default()
+    }
 }
 
 async fn sign_rsa_pkcs1(channel: &Channel, keys: &BenchKeys) -> Result<()> {

@@ -12,8 +12,10 @@ option java_multiple_files = true;
 service ScepService {
   // 解析 SCEP PKIO 外层 SignedData + 内层 EnvelopedData，解密得到 CSR。
   rpc ParseRequest(ParseScepRequestRequest) returns (ParseScepRequestResponse);
-  // 构建 SUCCESS CertRep（pkiStatus=0，含 pkcsPKIEnvelope）。
+  // 构建 SUCCESS CertRep（pkiStatus=0，含 EnvelopedData；算法由 envelope_cipher 指定）。
   rpc BuildSuccessCertRep(BuildScepSuccessCertRepRequest) returns (BuildScepCertRepResponse);
+  // 国密 SUCCESS CertRep：内层双证 + SKF Base64 信封；外层 EnvelopedData 算法可选（一次 RPC）。
+  rpc BuildGmSuccessCertRep(BuildScepGmSuccessCertRepRequest) returns (BuildScepCertRepResponse);
   // 构建 FAILURE CertRep（pkiStatus=2，无 envelop）。
   rpc BuildFailureCertRep(BuildScepFailureCertRepRequest) returns (BuildScepCertRepResponse);
   // 构建 PENDING CertRep（pkiStatus=3，待人工审批，无 envelop / failInfo）。
@@ -31,6 +33,17 @@ message ParseScepRequestResponse {
   bytes wrapper_cert_der = 2;
 }
 
+// CertRep 外层 EnvelopedData 对称算法。
+// 0–4 与 github.com/smallstep/pkcs7 ContentEncryptionAlgorithm 数值一致；5 为 SCEP 互操作常见的 3DES-CBC。
+enum ScepEnvelopeCipher {
+  SCEP_ENVELOPE_CIPHER_DES_CBC = 0;
+  SCEP_ENVELOPE_CIPHER_AES_128_CBC = 1;
+  SCEP_ENVELOPE_CIPHER_AES_256_CBC = 2;
+  SCEP_ENVELOPE_CIPHER_AES_128_GCM = 3;
+  SCEP_ENVELOPE_CIPHER_AES_256_GCM = 4;
+  SCEP_ENVELOPE_CIPHER_DES3_CBC = 5;
+}
+
 message BuildScepSuccessCertRepRequest {
   string ca_key_id = 1;
   string transaction_id = 2;
@@ -40,6 +53,25 @@ message BuildScepSuccessCertRepRequest {
   bytes sender_nonce = 4;
   bytes issued_cert_der = 5;
   bytes wrapper_cert_der = 6;
+  // 外层 EnvelopedData 算法；省略时为 DES-CBC（smallstep 默认）
+  ScepEnvelopeCipher envelope_cipher = 7;
+}
+
+// 国密 Enroll SUCCESS：内层 SignedData 含 [0]签名证、[1]加密证 + id-data(SKF Base64 字符串)；
+// 外层 CertRep 仍为标准 SCEP（CA 签名 + EnvelopedData 加密给 wrapper RSA 公钥）。
+message BuildScepGmSuccessCertRepRequest {
+  string ca_key_id = 1;
+  string transaction_id = 2;
+  bytes recipient_nonce = 3;
+  bytes sender_nonce = 4;
+  bytes sign_cert_der = 5;
+  bytes encryption_cert_der = 6;
+  // RA 返回的 SKF 密钥对密文（Base64 ASCII，原样写入内层 eContent）
+  bytes skf_content = 7;
+  // EnvelopedData 接收方（与 BuildSuccessCertRep 相同，通常为终端 wrapper RSA 证）
+  bytes wrapper_cert_der = 8;
+  // 外层 EnvelopedData 算法；省略时为 DES-CBC（与 BuildSuccessCertRep 相同）
+  ScepEnvelopeCipher envelope_cipher = 9;
 }
 
 message BuildScepFailureCertRepRequest {

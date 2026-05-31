@@ -197,7 +197,7 @@ flowchart LR
   subgraph Success["BuildSuccessCertRep"]
     S1[SignedData 签名]
     S2[pkiStatus = 0]
-    S3[EnvelopedData 3DES<br/>包裹 issued_cert]
+    S3[EnvelopedData<br/>算法可选 envelope_cipher]
   end
   subgraph Failure["BuildFailureCertRep"]
     F1[SignedData 签名]
@@ -601,7 +601,7 @@ SCEP offload 与 `CmsService` 同级，面向 RFC 8894 PKIO/CertRep 路径。完
 
 ### 6.2 BuildSuccessCertRep
 
-构建 SUCCESS CertRep（pkiStatus=0，含 3DES EnvelopedData 包裹的签发证书）。
+构建 SUCCESS CertRep（pkiStatus=0，含 EnvelopedData 包裹的签发证书）。
 
 **请求 `BuildScepSuccessCertRepRequest`**
 
@@ -613,12 +613,65 @@ SCEP offload 与 `CmsService` 同级，面向 RFC 8894 PKIO/CertRep 路径。完
 | `sender_nonce` | bytes | 否 | 响应 senderNonce；空则自动生成 16 字节 |
 | `issued_cert_der` | bytes | 是 | RA 签发的终端证书 DER |
 | `wrapper_cert_der` | bytes | 是 | wrapper 证书 DER（Envelop 接收方） |
+| `envelope_cipher` | enum | 否 | 外层 EnvelopedData 算法，见下表；省略时为 `DES_CBC`（与 smallstep/pkcs7 默认一致） |
+
+**`ScepEnvelopeCipher`（与 [smallstep/pkcs7 ContentEncryptionAlgorithm](https://github.com/smallstep/pkcs7) 数值对齐）**
+
+| 值 | 枚举名 | 算法 | 说明 |
+|----|--------|------|------|
+| 0 | `DES_CBC` | DES-CBC | smallstep 默认；legacy |
+| 1 | `AES_128_CBC` | AES-128-CBC | RFC 8894 推荐 |
+| 2 | `AES_256_CBC` | AES-256-CBC | step-ca 可选 |
+| 3 | `AES_128_GCM` | AES-128-GCM | step-ca 可选 |
+| 4 | `AES_256_GCM` | AES-256-GCM | step-ca 可选 |
+| 5 | `DES3_CBC` | 3DES-CBC | SCEP 互操作常见（GetCACaps `DES3`）；非 smallstep 加密 enum，解密端支持 |
+
+> Go RA 建议：Enroll 请求 EnvelopedData 用什么 OID，CertRep 就传相同 `envelope_cipher`。对接 Apple/老 MDM 常用 `DES3_CBC`（5）或 `AES_128_CBC`（1）。
 
 **响应 `BuildScepCertRepResponse`**
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `certrep_der` | bytes | CertRep PKCS#7 DER |
+
+### 6.2.1 BuildGmSuccessCertRep（国密 Enroll SUCCESS）
+
+一次 RPC 构建完整国密 SUCCESS CertRep。外层与标准 SCEP 相同（CA 签名 + EnvelopedData 加密给 `wrapper_cert` RSA 公钥）；**国密差异仅在内层** EnvelopedData 明文。`envelope_cipher` 语义与 §6.2 相同。
+
+**内层 SignedData（客户端 `reply_p7`）**
+
+| 字段 | 内容 |
+|------|------|
+| `certificates[0]` | 签名证书（leaf） |
+| `certificates[1]` | 加密证书 |
+| `eContentType` | `id-data` (`NID_pkcs7_data`) |
+| `eContent` | RA 返回的 **SKF 密钥对密文 Base64 字符串**（ASCII 原样写入，非二进制 DER） |
+
+**请求 `BuildScepGmSuccessCertRepRequest`**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `ca_key_id` | string | 是 | CA 私钥 key_id（SM2 CA 时自动用 SM3 签名 CertRep） |
+| `transaction_id` | string | 是 | SCEP transactionID |
+| `recipient_nonce` | bytes | 是 | 请求 senderNonce |
+| `sender_nonce` | bytes | 否 | 空则自动生成 16 字节 |
+| `sign_cert_der` | bytes | 是 | 签名证 DER |
+| `encryption_cert_der` | bytes | 是 | 加密证 DER |
+| `skf_content` | bytes | 是 | SKF Base64 字符串（RA opaque 传入） |
+| `wrapper_cert_der` | bytes | 是 | EnvelopedData RSA 接收方（通常终端 wrapper 证） |
+| `envelope_cipher` | enum | 否 | 外层 EnvelopedData 算法，见 §6.2 `ScepEnvelopeCipher` |
+
+**响应** 同 `BuildScepCertRepResponse`（`certrep_der`）。
+
+**典型流程（一次 RPC）**
+
+```
+Go SCEP RA 签发 signCert + encCert + SKF Base64
+  → ScepService.BuildGmSuccessCertRep(全部字段)
+  → certrep_der 回 HTTP
+```
+
+> 与 `BuildSuccessCertRep` 区别：后者内层仅单证且无 eContent；国密路径内层双证+SKF。两者共用同一 `envelope_cipher` 枚举。
 
 ### 6.3 BuildFailureCertRep
 
@@ -727,6 +780,7 @@ rep, _ := cli.BuildScepPendingCertRep(ctx, &pb.BuildScepPendingCertRepRequest{
 | PKIO 解密 → CSR（含 SignedAttributes） | `ParseRequest`（仅 CSR） | **`ParseEnrollPkio`（推荐）** |
 | GetCert PKIO → CertAliasOrCn | — | `ParseGetCertPkio` |
 | CertRep 构建 | `Build*CertRep` | — |
+| 国密 SUCCESS CertRep（双证 + SKF） | `BuildGmSuccessCertRep` | — |
 | 仅解析 SignedAttributes | — | `ParseSignedAttributes` |
 | CertAliasOrCn 编解码 | — | `Encode/DecodeCertAliasContent` |
 

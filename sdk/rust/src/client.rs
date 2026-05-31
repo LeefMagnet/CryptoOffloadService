@@ -162,6 +162,20 @@ impl Client {
         .await
     }
 
+    pub async fn build_scep_gm_success_cert_rep(
+        &self,
+        req: BuildScepGmSuccessCertRepRequest,
+    ) -> Result<BuildScepCertRepResponse> {
+        self.with_scep(|mut client| async move {
+            client
+                .build_gm_success_cert_rep(req)
+                .await
+                .map(|r| r.into_inner())
+                .context("BuildGmSuccessCertRep rpc")
+        })
+        .await
+    }
+
     pub async fn build_scep_failure_cert_rep(
         &self,
         req: BuildScepFailureCertRepRequest,

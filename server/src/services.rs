@@ -375,6 +375,7 @@ impl ScepService for ScepServiceImpl {
         let sender_nonce = req.sender_nonce;
         let issued_cert_der = req.issued_cert_der;
         let wrapper_cert_der = req.wrapper_cert_der;
+        let envelope_cipher = req.envelope_cipher;
         let state = self.state.clone();
         let certrep_der = run_crypto(&state, move || {
             crypto_scep::build_success_certrep(
@@ -384,6 +385,71 @@ impl ScepService for ScepServiceImpl {
                 &sender_nonce,
                 &issued_cert_der,
                 &wrapper_cert_der,
+                envelope_cipher,
+            )
+        })
+        .await?;
+
+        Ok(Response::new(BuildScepCertRepResponse { certrep_der }))
+    }
+
+    async fn build_gm_success_cert_rep(
+        &self,
+        request: Request<BuildScepGmSuccessCertRepRequest>,
+    ) -> Result<Response<BuildScepCertRepResponse>, Status> {
+        let req = request.into_inner();
+        for blob in [
+            &req.recipient_nonce,
+            &req.sender_nonce,
+            &req.sign_cert_der,
+            &req.encryption_cert_der,
+            &req.skf_content,
+            &req.wrapper_cert_der,
+        ] {
+            if blob.len() > MAX_SMALL_PACKET {
+                return Err(Status::invalid_argument("SCEP request field too large"));
+            }
+        }
+        if req.transaction_id.is_empty() {
+            return Err(Status::invalid_argument("transaction_id is required"));
+        }
+        if req.recipient_nonce.is_empty() {
+            return Err(Status::invalid_argument("recipient_nonce is required"));
+        }
+        if req.sign_cert_der.is_empty() || req.encryption_cert_der.is_empty() {
+            return Err(Status::invalid_argument("sign_cert_der and encryption_cert_der are required"));
+        }
+        if req.skf_content.is_empty() {
+            return Err(Status::invalid_argument("skf_content is required"));
+        }
+        if req.wrapper_cert_der.is_empty() {
+            return Err(Status::invalid_argument("wrapper_cert_der is required"));
+        }
+        let access = self
+            .state
+            .keys
+            .access_key(&req.ca_key_id)
+            .map_err(map_key_store_err)?;
+        let transaction_id = req.transaction_id;
+        let recipient_nonce = req.recipient_nonce;
+        let sender_nonce = req.sender_nonce;
+        let sign_cert_der = req.sign_cert_der;
+        let encryption_cert_der = req.encryption_cert_der;
+        let skf_content = req.skf_content;
+        let wrapper_cert_der = req.wrapper_cert_der;
+        let envelope_cipher = req.envelope_cipher;
+        let state = self.state.clone();
+        let certrep_der = run_crypto(&state, move || {
+            crypto_scep::build_gm_success_certrep(
+                access,
+                &transaction_id,
+                &recipient_nonce,
+                &sender_nonce,
+                &sign_cert_der,
+                &encryption_cert_der,
+                &skf_content,
+                &wrapper_cert_der,
+                envelope_cipher,
             )
         })
         .await?;

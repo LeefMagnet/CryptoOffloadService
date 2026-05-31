@@ -93,7 +93,7 @@ flowchart LR
 ```
 
 - **ParseRequest**：外层 SignedData 验签 + 内层 Envelop 解密 → `csr_der`、`wrapper_cert_der`
-- **BuildSuccessCertRep**：pkiStatus=0，含 3DES Envelop 包裹的签发证书
+- **BuildSuccessCertRep**：pkiStatus=0，EnvelopedData 算法由 `envelope_cipher` 指定（默认 DES-CBC，与 smallstep 一致）
 - **BuildFailureCertRep**：pkiStatus=2，无 Envelop，含 failInfo + failInfoText
 - **BuildPendingCertRep**：pkiStatus=3，无 Envelop / failInfo，待人工审批
 - **业务侧保留**：CSR 策略、审批、证书模板、HTTP/SCEP 协议层
@@ -229,6 +229,7 @@ Java 21 可用**虚拟线程** + blocking SDK，等待 offload 时不占满平�
 | **[OVERVIEW.md](./OVERVIEW.md)**（本文） | 架构师、产品、运维 | 方案、能力、性能、部署 |
 | [API.md](./API.md) | 开发 | RPC 字段、流程图、示例代码 |
 | [BENCHMARK_AND_TUNING.md](./BENCHMARK_AND_TUNING.md) | 运维、性能 | 压测、cpuset、clients 调优 |
+| [TESTING.md](./TESTING.md) | 开发、QA | 单元 / 集成测试用例矩阵与运行方式 |
 | [STABILITY.md](./STABILITY.md) | 运维、SRE | 加固措施与可选优化 |
 | [README.md](../README.md) | 全员 | 快速开始、构建、测试 |
 

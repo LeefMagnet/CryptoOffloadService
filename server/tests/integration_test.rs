@@ -715,3 +715,57 @@ async fn grpc_scep_certrep_verify() {
         .valid;
     assert!(verified);
 }
+
+#[tokio::test]
+async fn grpc_scep_success_certrep_envelope_ciphers() {
+    let url = start_test_server().await;
+    let channel = tonic::transport::Channel::from_shared(url)
+        .unwrap()
+        .connect()
+        .await
+        .expect("connect");
+
+    let (ca_pem, ca_der) = generate_rsa2048_der_cert().expect("ca");
+    let (_issued_pem, issued_der) = generate_rsa2048_der_cert().expect("issued");
+    let (_wrapper_pem, wrapper_der) = generate_rsa2048_der_cert().expect("wrapper");
+
+    let mut key_client = KeyServiceClient::new(channel.clone());
+    let mut scep_client = ScepServiceClient::new(channel);
+
+    let ca = key_client
+        .import_key(ImportKeyRequest {
+            kind: KeyKind::Private as i32,
+            lifetime: KeyLifetime::Permanent as i32,
+            format: KeyFormat::Pem as i32,
+            key_data: ca_pem,
+            certificate_data: ca_der,
+            certificate_format: KeyFormat::Der as i32,
+            ..Default::default()
+        })
+        .await
+        .expect("import ca")
+        .into_inner();
+    let ca_id = ca.metadata.expect("metadata").key_id;
+
+    // 0=DES-CBC（smallstep 默认），1=AES-128-CBC（RFC 8894），2=AES-256-CBC（step-ca）
+    for (cipher, label) in [
+        (0, "des-cbc"),
+        (1, "aes128-cbc"),
+        (2, "aes256-cbc"),
+    ] {
+        let resp = scep_client
+            .build_success_cert_rep(BuildScepSuccessCertRepRequest {
+                ca_key_id: ca_id.clone(),
+                transaction_id: format!("grpc-success-{label}"),
+                recipient_nonce: vec![cipher as u8, 0x02, 0x03, 0x04],
+                issued_cert_der: issued_der.clone(),
+                wrapper_cert_der: wrapper_der.clone(),
+                envelope_cipher: cipher,
+                ..Default::default()
+            })
+            .await
+            .unwrap_or_else(|e| panic!("build success certrep cipher={cipher}: {e}"))
+            .into_inner();
+        assert!(!resp.certrep_der.is_empty(), "cipher {cipher}");
+    }
+}

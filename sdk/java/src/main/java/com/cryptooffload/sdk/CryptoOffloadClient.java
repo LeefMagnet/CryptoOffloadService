@@ -19,6 +19,7 @@ import cryptooffload.v1.ScepExtServiceOuterClass.ParseScepSignedAttributesRespon
 import cryptooffload.v1.ScepServiceOuterClass.BuildScepCertRepResponse;
 import cryptooffload.v1.ScepServiceOuterClass.BuildScepFailureCertRepRequest;
 import cryptooffload.v1.ScepServiceOuterClass.BuildScepPendingCertRepRequest;
+import cryptooffload.v1.ScepServiceOuterClass.BuildScepGmSuccessCertRepRequest;
 import cryptooffload.v1.ScepServiceOuterClass.BuildScepSuccessCertRepRequest;
 import cryptooffload.v1.ScepServiceOuterClass.ParseScepRequestRequest;
 import cryptooffload.v1.ScepServiceOuterClass.ParseScepRequestResponse;
@@ -91,6 +92,13 @@ public final class CryptoOffloadClient implements AutoCloseable {
             throws InterruptedException {
         try (GrpcConnectionPool.PooledConn conn = pool.acquire()) {
             return ScepServiceGrpc.newBlockingStub(conn.channel()).buildSuccessCertRep(request);
+        }
+    }
+
+    public BuildScepCertRepResponse buildScepGmSuccessCertRep(BuildScepGmSuccessCertRepRequest request)
+            throws InterruptedException {
+        try (GrpcConnectionPool.PooledConn conn = pool.acquire()) {
+            return ScepServiceGrpc.newBlockingStub(conn.channel()).buildGmSuccessCertRep(request);
         }
     }
 

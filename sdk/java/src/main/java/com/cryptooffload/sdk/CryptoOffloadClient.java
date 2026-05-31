@@ -32,6 +32,17 @@ import cryptooffload.v1.SignServiceOuterClass.VerifyResponse;
  * CryptoOffload Java SDK 高层客户端。
  *
  * <p>使用前请运行 {@code cd sdk/java && mvn compile} 生成 gRPC stub。
+ *
+ * <p><b>并发</b>：本类线程安全，可在多个虚拟线程/平台线程间共享；连接池 {@code maxOpen}
+ * 应 ≥ 并发 RPC 数。
+ *
+ * <p>适合虚拟线程并发的 RPC：Sign、Verify、buildCms、parseEnrollPkio、parseGetCertPkio、
+ * buildScep*CertRep 等（各请求独立时）。
+ *
+ * <p>建议串行：importKey（低频）、同一临时 key_id 的多次 sign（TEMPORARY 钥仅用一次）。
+ * 单条 SCEP 事务内 Parse → RA → Build 有顺序；多条事务之间可并行。
+ *
+ * <p>完整示例与虚拟线程演示见 {@code examples/java/Demo.java}。
  */
 public final class CryptoOffloadClient implements AutoCloseable {
     private final GrpcConnectionPool pool;

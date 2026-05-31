@@ -1,6 +1,18 @@
 // Package client 封装 CryptoOffload gRPC 服务的高层 SDK。
 //
 // 使用前请先运行项目根目录 `make proto` 生成 `gen/` 代码。
+//
+// # 并发
+//
+// Client 线程安全，可在多个 goroutine 中共享同一 *Client；连接池 MaxOpen 应 ≥ 并发 RPC 数。
+//
+// 适合 goroutine 并发的 RPC：Sign、Verify、BuildCMS、VerifyCMS、ParseEnrollPkio、
+// ParseGetCertPkio、BuildScep*CertRep 等（各请求独立时）。
+//
+// 建议串行：ImportKey（低频）、同一临时 key_id 的多次 Sign（TEMPORARY 钥仅用一次）。
+// 单条 SCEP 事务内 Parse → RA → Build 有顺序；多条事务之间可并行。
+//
+// 完整示例与并发演示见 examples/go/demo/main.go。
 package client
 
 import (

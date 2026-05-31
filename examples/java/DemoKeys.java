@@ -4,7 +4,7 @@ import java.security.KeyPairGenerator;
 import java.security.PrivateKey;
 import java.util.Base64;
 
-/** 演示用 RSA-2048 密钥（仅示例，勿用于生产）。 */
+/** 演示用 RSA-2048 密钥（仅示例，勿用于生产）。本地 CPU 运算，与 Offload RPC 无关。 */
 final class DemoKeys {
     private DemoKeys() {}
 

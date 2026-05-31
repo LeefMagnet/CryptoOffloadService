@@ -4,6 +4,23 @@
 //   1. make proto
 //   2. 启动服务: cargo run -p crypto-offload-server -- --listen 127.0.0.1:50051
 //   3. go run ./examples/go/demo
+//
+// 并发与 goroutine
+//
+//   - client.Client 线程安全：多个 goroutine 可共享同一 *Client。
+//   - 连接池 MaxOpen 应 ≥ 预期并发 RPC 数，避免 Acquire 超时。
+//   - 每个 RPC 在 goroutine 内阻塞等待 gRPC 响应即可；服务端 crypto 有独立 in-flight 限制。
+//
+// 建议用 goroutine 并发的场景（见 demoConcurrentSigns）：
+//   - 批量 Sign / Verify、CMS Build / Verify
+//   - 多终端 SCEP 入站：ParseEnrollPkio、ParseGetCertPkio（各请求独立）
+//   - 多终端 CertRep：BuildScepSuccessCertRep / Failure / Pending
+//
+// 建议串行、不宜盲目并发的场景：
+//   - ImportKey：启动/轮换时一次性导入
+//   - KEY_LIFETIME_TEMPORARY 临时钥：同一 key_id 只能 Sign 一次
+//   - 单条 SCEP 事务内 Parse → RA → Build 有顺序依赖；多条事务之间可并行
+//   - GetCACert：Go SCEP 本地缓存响应，不经 Offload
 package main
 
 import (
@@ -18,6 +35,7 @@ import (
 	"log"
 	"math/big"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/cryptooffload/sdk-go/client"
@@ -29,6 +47,7 @@ func main() {
 	addr := env("CRYPTO_OFFLOAD_ADDR", "127.0.0.1:50051")
 	ctx := context.Background()
 
+	// MaxOpen 建议 ≥ 并发 goroutine 数；SCEP 网关可按 offload 核数调整
 	cli, err := client.New(ctx, client.Config{
 		Config: pool.Config{
 			Address:        addr,
@@ -47,7 +66,7 @@ func main() {
 
 	privPEM, certPEM := loadOrGenerateKeyMaterial()
 
-	// --- 1. ImportKey：一次性导入，服务端解析 PEM 并缓存 PKey ---
+	// --- 1. ImportKey：低频、串行；一次性导入，服务端解析 PEM 并缓存 PKey ---
 	imported, err := cli.ImportKey(ctx, &pb.ImportKeyRequest{
 		Kind:              pb.KeyKind_KEY_KIND_PRIVATE,
 		Lifetime:          pb.KeyLifetime_KEY_LIFETIME_PERMANENT,
@@ -64,20 +83,25 @@ func main() {
 	fmt.Printf("[ImportKey] key_id=%s algorithm=%s bits=%d\n",
 		keyID, imported.GetMetadata().GetAlgorithm(), imported.GetMetadata().GetKeyBits())
 
-	// --- 2. Sign：后续仅传 key_id，不再传 PEM ---
+	// --- 2. Sign：热路径只传 key_id；高 QPS 时用 goroutine 并发（见 demoConcurrentSigns）---
 	payload := []byte("hello crypto-offload")
 	signResp, err := cli.Sign(ctx, &pb.SignRequest{
-		KeyId:          keyID,
-		Data:           payload,
-		HashAlgorithm:  pb.HashAlgorithm_HASH_SHA256,
-		SignAlgorithm:  pb.SignAlgorithm_SIGN_RSA_PKCS1_V15,
+		KeyId:         keyID,
+		Data:          payload,
+		HashAlgorithm: pb.HashAlgorithm_HASH_SHA256,
+		SignAlgorithm: pb.SignAlgorithm_SIGN_RSA_PKCS1_V15,
 	})
 	if err != nil {
 		log.Fatalf("Sign: %v", err)
 	}
 	fmt.Printf("[Sign] signature_len=%d\n", len(signResp.GetSignature()))
 
-	// --- 3. 导入公钥并 Verify ---
+	// --- 3. 并发 Sign 演示：模拟多请求同时 offload ---
+	if err := demoConcurrentSigns(ctx, cli, keyID, payload); err != nil {
+		log.Fatalf("ConcurrentSign: %v", err)
+	}
+
+	// --- 4. 导入公钥并 Verify（单条串行；批量验签可对每条 Verify 起 goroutine）---
 	pubPEM := extractPublicPEM(privPEM)
 	pubImported, err := cli.ImportKey(ctx, &pb.ImportKeyRequest{
 		Kind:     pb.KeyKind_KEY_KIND_PUBLIC,
@@ -101,11 +125,11 @@ func main() {
 	}
 	fmt.Printf("[Verify] valid=%v\n", verifyResp.GetValid())
 
-	// --- 4. CMS Build / Verify ---
+	// --- 5. CMS Build / Verify（Build 可并发；同一 sign_key_id 并发安全）---
 	cmsResp, err := cli.BuildCMS(ctx, &pb.BuildCmsRequest{
-		Content:    payload,
-		SignKeyId:  keyID,
-		Detached:   false,
+		Content:   payload,
+		SignKeyId: keyID,
+		Detached:  false,
 	})
 	if err != nil {
 		log.Fatalf("BuildCMS: %v", err)
@@ -113,15 +137,15 @@ func main() {
 	fmt.Printf("[BuildCMS] cms_len=%d\n", len(cmsResp.GetCmsDer()))
 
 	cmsVerify, err := cli.VerifyCMS(ctx, &pb.VerifyCmsRequest{
-		CmsDer:       cmsResp.GetCmsDer(),
-		VerifyKeyId:  pubImported.GetMetadata().GetKeyId(),
+		CmsDer:      cmsResp.GetCmsDer(),
+		VerifyKeyId: pubImported.GetMetadata().GetKeyId(),
 	})
 	if err != nil {
 		log.Fatalf("VerifyCMS: %v", err)
 	}
 	fmt.Printf("[VerifyCMS] valid=%v\n", cmsVerify.GetValid())
 
-	// --- 5. 临时密钥：首次 Sign 后自动销毁 ---
+	// --- 6. 临时密钥：必须串行——首次 Sign 后 key 即销毁，不可并发复用同一 key_id ---
 	tmpImported, err := cli.ImportKey(ctx, &pb.ImportKeyRequest{
 		Kind:     pb.KeyKind_KEY_KIND_PRIVATE,
 		Lifetime: pb.KeyLifetime_KEY_LIFETIME_TEMPORARY,
@@ -147,6 +171,46 @@ func main() {
 
 	keys, _ := cli.ListKeys(ctx)
 	fmt.Printf("[ListKeys] count=%d\n", len(keys.GetKeys()))
+
+	// SCEP 网关典型并发模式（伪代码，未在此 demo 调用）：
+	//   go func() {
+	//       parsed, _ := cli.ParseEnrollPkio(ctx, &pb.ParseEnrollPkioRequest{...})
+	//       // RA 审批 ...
+	//       rep, _ := cli.BuildScepSuccessCertRep(ctx, &pb.BuildScepSuccessCertRepRequest{...})
+	//   }()
+}
+
+// demoConcurrentSigns 用 goroutine 并发发起多条 Sign RPC。
+//
+// SCEP 场景：每条 HTTP 请求可在独立 goroutine 中 ParseEnrollPkio → RA → BuildCertRep；
+// 不同终端事务之间无共享状态，适合与 net/http 每请求一 goroutine 模型配合。
+func demoConcurrentSigns(ctx context.Context, cli *client.Client, keyID string, payload []byte) error {
+	const parallelism = 8
+	var wg sync.WaitGroup
+	errCh := make(chan error, parallelism)
+
+	for i := 0; i < parallelism; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := cli.Sign(ctx, &pb.SignRequest{
+				KeyId:         keyID,
+				Data:          payload,
+				HashAlgorithm: pb.HashAlgorithm_HASH_SHA256,
+				SignAlgorithm: pb.SignAlgorithm_SIGN_RSA_PKCS1_V15,
+			})
+			if err != nil {
+				errCh <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		return err
+	}
+	fmt.Printf("[ConcurrentSign] completed %d parallel Sign RPCs\n", parallelism)
+	return nil
 }
 
 func env(k, def string) string {

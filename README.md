@@ -107,10 +107,13 @@ Docker 构建阶段会自动执行 `cargo test`；`test-runner` 容器对 `crypt
 
 ```bash
 # 需要安装 buf: https://buf.build/docs/installation
-make proto
+make proto          # Go（sdk/go/gen/）与 Python stub
+cd sdk/java && mvn compile   # Java gRPC stub
 ```
 
 Rust 服务端/客户端在 `cargo build` 时通过 `tonic-build` 自动生成，无需 buf。
+
+> **Go / Java 接入前务必重新生成 stub**，否则 proto 新增字段（如 `ScepEnvelopeCipher`、`envelope_cipher`）在 SDK 中不可见。
 
 ### 2. 启动服务
 

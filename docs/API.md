@@ -240,21 +240,41 @@ stateDiagram-v2
 
 ### 1.5 SDK 方法对照
 
-| gRPC RPC | Go | Python | Rust | Java |
-|----------|-----|--------|------|------|
-| `KeyService.ImportKey` | `ImportKey` | `import_key` | `import_key` | `importKey` |
-| `KeyService.DeleteKey` | `DeleteKey` | `delete_key` | `delete_key` | `deleteKey` |
-| `SignService.Sign` | `Sign` | `sign` | `sign` | `sign` |
-| `SignService.Verify` | `Verify` | `verify` | `verify` | `verify` |
-| `CmsService.Build` | `BuildCMS` | `build_cms` | `build_cms` | `buildCms` |
-| `CmsService.Parse` | `ParseCMS` | `parse_cms` | `parse_cms` | `parseCms` |
-| `CmsService.Verify` | `VerifyCMS` | `verify_cms` | `verify_cms` | `verifyCms` |
-| `ScepService.ParseRequest` | `ParseScepRequest` | `parse_scep_request` | `parse_scep_request` | `parseScepRequest` |
-| `ScepService.BuildSuccessCertRep` | `BuildScepSuccessCertRep` | `build_scep_success_cert_rep` | `build_scep_success_cert_rep` | `buildScepSuccessCertRep` |
-| `ScepService.BuildFailureCertRep` | `BuildScepFailureCertRep` | `build_scep_failure_cert_rep` | `build_scep_failure_cert_rep` | `buildScepFailureCertRep` |
-| `ScepService.BuildPendingCertRep` | `BuildScepPendingCertRep` | `build_scep_pending_cert_rep` | `build_scep_pending_cert_rep` | `buildScepPendingCertRep` |
+生产接入推荐 **Go / Rust / Java**；Python SDK 保留但非主路径。
 
-连接池：Go `client.New` / Python `CryptoOffloadClient` / Rust `Client::connect` / Java `CryptoOffloadClient.connect`。
+| gRPC RPC | Go | Rust | Java |
+|----------|-----|------|------|
+| `KeyService.ImportKey` | `ImportKey` | `import_key` | `importKey` |
+| `KeyService.DeleteKey` | `DeleteKey` | `delete_key` | — |
+| `KeyService.GetKeyInfo` | `GetKeyInfo` | `get_key_info` | — |
+| `KeyService.ListKeys` | `ListKeys` | `list_keys` | — |
+| `SignService.Sign` | `Sign` | `sign` | `sign` |
+| `SignService.Verify` | `Verify` | `verify` | `verify` |
+| `CmsService.Build` | `BuildCMS` | `build_cms` | `buildCms` |
+| `CmsService.Parse` | `ParseCMS` | `parse_cms` | `parseCms` |
+| `CmsService.Verify` | `VerifyCMS` | `verify_cms` | `verifyCms` |
+| `ScepService.ParseRequest` | `ParseScepRequest` | `parse_scep_request` | `parseScepRequest` |
+| `ScepService.BuildSuccessCertRep` | `BuildScepSuccessCertRep` | `build_scep_success_cert_rep` | `buildScepSuccessCertRep` |
+| `ScepService.BuildGmSuccessCertRep` | `BuildScepGmSuccessCertRep` | `build_scep_gm_success_cert_rep` | `buildScepGmSuccessCertRep` |
+| `ScepService.BuildFailureCertRep` | `BuildScepFailureCertRep` | `build_scep_failure_cert_rep` | `buildScepFailureCertRep` |
+| `ScepService.BuildPendingCertRep` | `BuildScepPendingCertRep` | `build_scep_pending_cert_rep` | `buildScepPendingCertRep` |
+| `ScepExtService.ParseSignedAttributes` | `ParseScepSignedAttributes` | `parse_scep_signed_attributes` | `parseScepSignedAttributes` |
+| `ScepExtService.ParseGetCertPkio` | `ParseGetCertPkio` | `parse_get_cert_pkio` | `parseGetCertPkio` |
+| `ScepExtService.ParseEnrollPkio` | `ParseEnrollPkio` | `parse_enroll_pkio` | `parseEnrollPkio` |
+| `ScepExtService.EncodeCertAliasContent` | `EncodeCertAliasContent` | `encode_cert_alias_content` | `encodeCertAliasContent` |
+| `ScepExtService.DecodeCertAliasContent` | `DecodeCertAliasContent` | `decode_cert_alias_content` | `decodeCertAliasContent` |
+
+`BuildSuccessCertRep` / `BuildGmSuccessCertRep` 的 **`envelope_cipher`** 在 Request 中设置（proto 枚举 `ScepEnvelopeCipher`，见 §6.2），无需额外 SDK 方法。
+
+**生成 stub**
+
+| 语言 | 命令 |
+|------|------|
+| Go | `make proto` → `sdk/go/gen/` |
+| Rust | `cargo build -p cryptooffload-sdk`（tonic-build） |
+| Java | `cd sdk/java && mvn compile` |
+
+连接池：Go `client.New` / Rust `Client::connect` / Java `CryptoOffloadClient`。
 
 ### 1.6 密钥存储模型（重要）
 

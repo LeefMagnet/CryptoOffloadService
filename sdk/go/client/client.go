@@ -210,6 +210,7 @@ func (c *Client) ParseScepRequest(ctx context.Context, req *pb.ParseScepRequestR
 }
 
 // BuildScepSuccessCertRep 构建 SCEP SUCCESS CertRep。
+// envelope_cipher 见 pb.ScepEnvelopeCipher（与 smallstep/pkcs7 ContentEncryptionAlgorithm 0–5 对齐）。
 func (c *Client) BuildScepSuccessCertRep(ctx context.Context, req *pb.BuildScepSuccessCertRepRequest) (*pb.BuildScepCertRepResponse, error) {
 	var resp *pb.BuildScepCertRepResponse
 	err := c.withConn(ctx, func(conn *pool.Conn) error {
@@ -320,6 +321,21 @@ func (c *Client) EncodeCertAliasContent(ctx context.Context, req *pb.EncodeCertA
 	err := c.withConn(ctx, func(conn *pool.Conn) error {
 		cli := pb.NewScepExtServiceClient(conn.GRPC())
 		out, err := cli.EncodeCertAliasContent(ctx, req)
+		if err != nil {
+			return err
+		}
+		resp = out
+		return nil
+	})
+	return resp, err
+}
+
+// DecodeCertAliasContent 解码 CertAliasOrCn / SerialNumber DER。
+func (c *Client) DecodeCertAliasContent(ctx context.Context, req *pb.DecodeCertAliasContentRequest) (*pb.DecodeCertAliasContentResponse, error) {
+	var resp *pb.DecodeCertAliasContentResponse
+	err := c.withConn(ctx, func(conn *pool.Conn) error {
+		cli := pb.NewScepExtServiceClient(conn.GRPC())
+		out, err := cli.DecodeCertAliasContent(ctx, req)
 		if err != nil {
 			return err
 		}

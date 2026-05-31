@@ -3,11 +3,17 @@ package com.cryptooffload.sdk;
 import cryptooffload.v1.CmsServiceGrpc;
 import cryptooffload.v1.CmsServiceOuterClass.BuildCmsRequest;
 import cryptooffload.v1.CmsServiceOuterClass.BuildCmsResponse;
+import cryptooffload.v1.CmsServiceOuterClass.ParseCmsRequest;
+import cryptooffload.v1.CmsServiceOuterClass.ParseCmsResponse;
+import cryptooffload.v1.CmsServiceOuterClass.VerifyCmsRequest;
+import cryptooffload.v1.CmsServiceOuterClass.VerifyCmsResponse;
 import cryptooffload.v1.KeyServiceGrpc;
 import cryptooffload.v1.KeyServiceOuterClass.ImportKeyRequest;
 import cryptooffload.v1.KeyServiceOuterClass.ImportKeyResponse;
 import cryptooffload.v1.ScepExtServiceGrpc;
 import cryptooffload.v1.ScepServiceGrpc;
+import cryptooffload.v1.ScepExtServiceOuterClass.DecodeCertAliasContentRequest;
+import cryptooffload.v1.ScepExtServiceOuterClass.DecodeCertAliasContentResponse;
 import cryptooffload.v1.ScepExtServiceOuterClass.EncodeCertAliasContentRequest;
 import cryptooffload.v1.ScepExtServiceOuterClass.EncodeCertAliasContentResponse;
 import cryptooffload.v1.ScepExtServiceOuterClass.ParseEnrollPkioRequest;
@@ -81,6 +87,18 @@ public final class CryptoOffloadClient implements AutoCloseable {
         }
     }
 
+    public ParseCmsResponse parseCms(ParseCmsRequest request) throws InterruptedException {
+        try (GrpcConnectionPool.PooledConn conn = pool.acquire()) {
+            return CmsServiceGrpc.newBlockingStub(conn.channel()).parse(request);
+        }
+    }
+
+    public VerifyCmsResponse verifyCms(VerifyCmsRequest request) throws InterruptedException {
+        try (GrpcConnectionPool.PooledConn conn = pool.acquire()) {
+            return CmsServiceGrpc.newBlockingStub(conn.channel()).verify(request);
+        }
+    }
+
     public ParseScepRequestResponse parseScepRequest(ParseScepRequestRequest request)
             throws InterruptedException {
         try (GrpcConnectionPool.PooledConn conn = pool.acquire()) {
@@ -95,6 +113,7 @@ public final class CryptoOffloadClient implements AutoCloseable {
         }
     }
 
+    /** 国密 SUCCESS CertRep；{@code envelope_cipher} 见 {@code ScepEnvelopeCipher}（§API 6.2）。 */
     public BuildScepCertRepResponse buildScepGmSuccessCertRep(BuildScepGmSuccessCertRepRequest request)
             throws InterruptedException {
         try (GrpcConnectionPool.PooledConn conn = pool.acquire()) {
@@ -141,6 +160,13 @@ public final class CryptoOffloadClient implements AutoCloseable {
             EncodeCertAliasContentRequest request) throws InterruptedException {
         try (GrpcConnectionPool.PooledConn conn = pool.acquire()) {
             return ScepExtServiceGrpc.newBlockingStub(conn.channel()).encodeCertAliasContent(request);
+        }
+    }
+
+    public DecodeCertAliasContentResponse decodeCertAliasContent(
+            DecodeCertAliasContentRequest request) throws InterruptedException {
+        try (GrpcConnectionPool.PooledConn conn = pool.acquire()) {
+            return ScepExtServiceGrpc.newBlockingStub(conn.channel()).decodeCertAliasContent(request);
         }
     }
 

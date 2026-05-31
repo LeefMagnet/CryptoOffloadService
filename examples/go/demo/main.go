@@ -176,7 +176,14 @@ func main() {
 	//   go func() {
 	//       parsed, _ := cli.ParseEnrollPkio(ctx, &pb.ParseEnrollPkioRequest{...})
 	//       // RA 审批 ...
-	//       rep, _ := cli.BuildScepSuccessCertRep(ctx, &pb.BuildScepSuccessCertRepRequest{...})
+	//       rep, _ := cli.BuildScepSuccessCertRep(ctx, &pb.BuildScepSuccessCertRepRequest{
+	//           CaKeyId: caKeyID, TransactionId: parsed.GetTransactionId(),
+	//           RecipientNonce: parsed.GetSenderNonce(), IssuedCertDer: issuedDER,
+	//           WrapperCertDer: parsed.GetWrapperCertDer(),
+	//           // 与 Enroll PKIO Envelop OID 一致；RFC 8894 常用 AES-128，老 MDM 常用 DES3(5)
+	//           EnvelopeCipher: pb.ScepEnvelopeCipher_SCEP_ENVELOPE_CIPHER_AES_128_CBC,
+	//       })
+	//       // 国密 Enroll：BuildScepGmSuccessCertRep，同样设置 EnvelopeCipher
 	//   }()
 }
 

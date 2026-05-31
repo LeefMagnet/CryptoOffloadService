@@ -1,7 +1,11 @@
-.PHONY: proto build-server build-rust-sdk test benchmark docker-test
+.PHONY: proto proto-java build-server build-rust-sdk test benchmark docker-test
 
 proto:
 	buf generate
+
+# Java stub（mvn protobuf 插件）；Go 用 make proto
+proto-java:
+	cd sdk/java && mvn compile -q
 
 build-server:
 	cargo build --release -p crypto-offload-server

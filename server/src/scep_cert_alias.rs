@@ -79,7 +79,7 @@ fn decode_context_utf8(der: &[u8], choice: u8) -> Result<Option<String>> {
     }
     let (len, hdr) = parse_der_length(&der[1..])?;
     let start = 1 + hdr;
-    let end = start + len;
+    let end = start.checked_add(len).ok_or_else(|| anyhow!("DER length overflow"))?;
     if end > der.len() {
         return Ok(None);
     }
@@ -89,7 +89,9 @@ fn decode_context_utf8(der: &[u8], choice: u8) -> Result<Option<String>> {
     }
     let (str_len, str_hdr) = parse_der_length(&inner[1..])?;
     let s0 = 1 + str_hdr;
-    let s1 = s0 + str_len;
+    let s1 = s0
+        .checked_add(str_len)
+        .ok_or_else(|| anyhow!("DER length overflow"))?;
     if s1 > inner.len() {
         return Ok(None);
     }
@@ -138,12 +140,26 @@ fn try_decode_serial_number(der: &[u8]) -> Result<Option<String>> {
         return Ok(None);
     }
     let (seq_len, hdr) = parse_der_length(&der[1..])?;
-    let body = &der[1 + hdr..1 + hdr + seq_len];
+    let body_start = 1 + hdr;
+    let body_end = body_start
+        .checked_add(seq_len)
+        .ok_or_else(|| anyhow!("DER length overflow"))?;
+    if body_end > der.len() {
+        return Ok(None);
+    }
+    let body = &der[body_start..body_end];
     if body.first() != Some(&0x02) {
         return Ok(None);
     }
     let (int_len, int_hdr) = parse_der_length(&body[1..])?;
-    let int_bytes = &body[1 + int_hdr..1 + int_hdr + int_len];
+    let int_start = 1 + int_hdr;
+    let int_end = int_start
+        .checked_add(int_len)
+        .ok_or_else(|| anyhow!("DER length overflow"))?;
+    if int_end > body.len() {
+        return Ok(None);
+    }
+    let int_bytes = &body[int_start..int_end];
     let bn = BigNum::from_slice(int_bytes).context("serial bn")?;
     Ok(Some(bn.to_hex_str()?.to_string()))
 }

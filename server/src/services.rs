@@ -16,6 +16,8 @@ use crate::pb::sign_service_server::SignService;
 use crate::pb::*;
 
 const MAX_SMALL_PACKET: usize = 1024 * 1024;
+const CMS_CONTENT_TYPE_UNSPECIFIED: i32 = 0;
+const CMS_CONTENT_TYPE_DATA: i32 = 1;
 
 pub struct AppState {
     pub keys: KeyStore,
@@ -80,6 +82,15 @@ impl ScepExtServiceImpl {
     pub fn new(state: Arc<AppState>) -> Self {
         Self { state }
     }
+}
+
+fn validate_cms_content_type(content_type: i32) -> Result<(), Status> {
+    if content_type == CMS_CONTENT_TYPE_UNSPECIFIED || content_type == CMS_CONTENT_TYPE_DATA {
+        return Ok(());
+    }
+    Err(Status::invalid_argument(
+        "unsupported content_type: only CMS_CONTENT_TYPE_DATA is supported",
+    ))
 }
 
 async fn run_crypto<T, F>(state: &Arc<AppState>, f: F) -> Result<T, Status>
@@ -271,6 +282,7 @@ impl CmsService for CmsServiceImpl {
         request: Request<BuildCmsRequest>,
     ) -> Result<Response<BuildCmsResponse>, Status> {
         let req = request.into_inner();
+        validate_cms_content_type(req.content_type)?;
         if req.content.len() > MAX_SMALL_PACKET {
             return Err(Status::invalid_argument("content too large"));
         }

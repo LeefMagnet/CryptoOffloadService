@@ -12,8 +12,9 @@ service CmsService {
   // 解析 CMS SignedData，可选使用 decrypt_key_id 解密 EnvelopedData 内层。
   rpc Parse(ParseCmsRequest) returns (ParseCmsResponse);
   // 构建 CMS SignedData；sign_key_id 必须为私钥（可含证书）。
+  // 仅支持 CMS_CONTENT_TYPE_UNSPECIFIED / CMS_CONTENT_DATA，DIGESTED 暂不支持。
   rpc Build(BuildCmsRequest) returns (BuildCmsResponse);
-  // 验签 CMS SignedData；verify_key_id 为公钥或证书。
+  // 验签 CMS SignedData；verify_key_id 为公钥或证书，且必须与签名证书公钥匹配。
   rpc Verify(VerifyCmsRequest) returns (VerifyCmsResponse);
 }
 

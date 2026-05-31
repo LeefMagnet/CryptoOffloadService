@@ -332,7 +332,7 @@ stateDiagram-v2
 |----|------|------|
 | 0 | `CMS_CONTENT_TYPE_UNSPECIFIED` | 默认按 DATA 处理 |
 | 1 | `CMS_CONTENT_DATA` | 内嵌 data |
-| 2 | `CMS_CONTENT_DIGESTED` | digestedData（预留） |
+| 2 | `CMS_CONTENT_DIGESTED` | digestedData（当前服务端暂不支持，传入会返回 `INVALID_ARGUMENT`） |
 
 ### 2.7 KeyMetadata — 密钥元数据
 
@@ -521,7 +521,7 @@ let sign_resp = client.sign(SignRequest {
 |------|------|------|------|
 | `content` | bytes | 是 | 待签名内容 |
 | `sign_key_id` | string | 是 | 私钥 key_id（需 ImportKey 时附带 certificate_data） |
-| `content_type` | CmsContentType | 否 | 默认 DATA |
+| `content_type` | CmsContentType | 否 | 默认 DATA；仅支持 `UNSPECIFIED/DATA`，`DIGESTED` 返回 `INVALID_ARGUMENT` |
 | `detached` | bool | 否 | detached 签名 |
 | `extra_certificates` | repeated bytes | 否 | 附加证书链 DER |
 
@@ -535,14 +535,14 @@ let sign_resp = client.sign(SignRequest {
 
 ### 5.3 Verify
 
-验证 CMS SignedData。
+验证 CMS SignedData，并要求 `verify_key_id` 与报文中的签名证书公钥匹配。
 
 **请求 `VerifyCmsRequest`**
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `cms_der` | bytes | CMS DER |
-| `verify_key_id` | string | 公钥/证书 key_id |
+| `verify_key_id` | string | 公钥/证书 key_id（必须匹配签名证书公钥） |
 | `content` | bytes | detached 时传入原始内容；attached 可空 |
 
 **响应 `VerifyCmsResponse`**

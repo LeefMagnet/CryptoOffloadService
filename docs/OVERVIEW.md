@@ -240,7 +240,7 @@ Java 21 可用**虚拟线程** + blocking SDK，等待 offload 时不占满平�
 - **Proto 包**：`cryptooffload.v1`
 - **默认端口**：`50051`
 - **OpenSSL**：**3.0+**（推荐 3.x）；SCEP 3DES 需加载 **legacy provider**；**SM2/SM3 国密自 3.0 起可用**，1.1.x 不支持
-- **当前版本**：0.2.x（`feature/scep-ext-v0.2` 分支；ScepExtService 扩展）
+- **当前版本**：0.2.1（`feature/scep-ext-v0.2` 分支；ScepExtService 扩展）
 
 **快速验证**
 

@@ -19,6 +19,7 @@ use crypto_offload_server::test_support::{
 };
 use openssl::x509::X509;
 use tokio::time::{sleep, Duration};
+use tonic::Code;
 
 async fn start_test_server() -> String {
     let addr = free_port();
@@ -138,6 +139,149 @@ async fn grpc_import_sign_verify_cms_flow() {
         .expect("list")
         .into_inner();
     assert!(list.keys.len() >= 2);
+}
+
+#[tokio::test]
+async fn grpc_cms_verify_rejects_wrong_verify_key() {
+    let url = start_test_server().await;
+    let channel = tonic::transport::Channel::from_shared(url)
+        .unwrap()
+        .connect()
+        .await
+        .expect("connect");
+
+    let (priv_a_pem, cert_a_der) = generate_rsa2048_der_cert().expect("key A");
+    let pub_a_pem = extract_public_pem(&priv_a_pem).expect("pub A");
+    let (priv_b_pem, _) = generate_rsa2048_pem().expect("key B");
+    let pub_b_pem = extract_public_pem(&priv_b_pem).expect("pub B");
+
+    let mut key_client = KeyServiceClient::new(channel.clone());
+    let mut cms_client = CmsServiceClient::new(channel);
+
+    let priv_a_id = key_client
+        .import_key(ImportKeyRequest {
+            kind: KeyKind::Private as i32,
+            lifetime: KeyLifetime::Permanent as i32,
+            format: KeyFormat::Pem as i32,
+            key_data: priv_a_pem,
+            certificate_data: cert_a_der,
+            certificate_format: KeyFormat::Der as i32,
+            ..Default::default()
+        })
+        .await
+        .expect("import private A")
+        .into_inner()
+        .metadata
+        .expect("metadata")
+        .key_id;
+
+    let pub_a_id = key_client
+        .import_key(ImportKeyRequest {
+            kind: KeyKind::Public as i32,
+            lifetime: KeyLifetime::Permanent as i32,
+            format: KeyFormat::Pem as i32,
+            key_data: pub_a_pem,
+            ..Default::default()
+        })
+        .await
+        .expect("import public A")
+        .into_inner()
+        .metadata
+        .expect("metadata")
+        .key_id;
+
+    let pub_b_id = key_client
+        .import_key(ImportKeyRequest {
+            kind: KeyKind::Public as i32,
+            lifetime: KeyLifetime::Permanent as i32,
+            format: KeyFormat::Pem as i32,
+            key_data: pub_b_pem,
+            ..Default::default()
+        })
+        .await
+        .expect("import public B")
+        .into_inner()
+        .metadata
+        .expect("metadata")
+        .key_id;
+
+    let cms_der = cms_client
+        .build(BuildCmsRequest {
+            content: b"verify-key-must-match".to_vec(),
+            sign_key_id: priv_a_id,
+            detached: false,
+            ..Default::default()
+        })
+        .await
+        .expect("cms build")
+        .into_inner()
+        .cms_der;
+
+    let ok = cms_client
+        .verify(VerifyCmsRequest {
+            cms_der: cms_der.clone(),
+            verify_key_id: pub_a_id,
+            ..Default::default()
+        })
+        .await
+        .expect("verify with key A")
+        .into_inner()
+        .valid;
+    assert!(ok, "verify should pass with matching verify_key_id");
+
+    let wrong = cms_client
+        .verify(VerifyCmsRequest {
+            cms_der,
+            verify_key_id: pub_b_id,
+            ..Default::default()
+        })
+        .await
+        .expect("verify with key B")
+        .into_inner()
+        .valid;
+    assert!(!wrong, "verify should fail with non-matching verify_key_id");
+}
+
+#[tokio::test]
+async fn grpc_cms_build_rejects_unsupported_content_type() {
+    let url = start_test_server().await;
+    let channel = tonic::transport::Channel::from_shared(url)
+        .unwrap()
+        .connect()
+        .await
+        .expect("connect");
+
+    let (priv_pem, cert_der) = generate_rsa2048_der_cert().expect("key");
+    let mut key_client = KeyServiceClient::new(channel.clone());
+    let mut cms_client = CmsServiceClient::new(channel);
+
+    let sign_key_id = key_client
+        .import_key(ImportKeyRequest {
+            kind: KeyKind::Private as i32,
+            lifetime: KeyLifetime::Permanent as i32,
+            format: KeyFormat::Pem as i32,
+            key_data: priv_pem,
+            certificate_data: cert_der,
+            certificate_format: KeyFormat::Der as i32,
+            ..Default::default()
+        })
+        .await
+        .expect("import sign key")
+        .into_inner()
+        .metadata
+        .expect("metadata")
+        .key_id;
+
+    let err = cms_client
+        .build(BuildCmsRequest {
+            content: b"cms-content-type".to_vec(),
+            sign_key_id,
+            content_type: 2, // CMS_CONTENT_DIGESTED
+            ..Default::default()
+        })
+        .await
+        .expect_err("digested content_type should be rejected");
+    assert_eq!(err.code(), Code::InvalidArgument);
 }
 
 #[tokio::test]

@@ -27,6 +27,22 @@ fn scep_ext_encode_decode_serial_number() {
 }
 
 #[test]
+fn scep_ext_decode_malformed_der_returns_error_not_panic() {
+    openssl_init::init();
+    let malformed_cases = [
+        vec![0x30, 0x82, 0xFF, 0xFF, 0x02, 0x01, 0x01],
+        vec![0x30, 0x05, 0x02, 0x04, 0x01, 0x02],
+        vec![0xA0, 0x82, 0xFF, 0xFF, 0x0C, 0x01, b'A'],
+    ];
+
+    for der in malformed_cases {
+        let outcome = std::panic::catch_unwind(|| crypto_scep_ext::decode_cert_alias_content(&der));
+        assert!(outcome.is_ok(), "malformed DER should not panic");
+        assert!(outcome.expect("decode run").is_err(), "malformed DER should be rejected");
+    }
+}
+
+#[test]
 fn scep_ext_parse_signed_attributes_from_certrep() {
     openssl_init::init();
     use crypto_offload_server::cryptooffload::v1::{KeyFormat, KeyKind, KeyLifetime};

@@ -15,7 +15,7 @@
 
 **环境要求**
 
-- OpenSSL **3.x**，且加载 **legacy provider**（DES-CBC / 3DES EnvelopedData 依赖此项）。
+- OpenSSL **3.x**，且加载 **legacy provider**（3DES EnvelopedData 依赖此项）。
 - Debian bookworm 等需：`apt install openssl-provider-legacy`。
 - SM2 相关用例在 OpenSSL 无国密支持时会 **skip** 或失败（视用例而定）。
 
@@ -60,7 +60,7 @@ flowchart TB
 | CMS 构建 / 解析 / 验签 | — | ✓ |
 | SCEP PKIO 解析 | ✓ | ✓ |
 | SCEP CertRep 构建（SUCCESS / FAILURE / PENDING） | ✓ | ✓ |
-| EnvelopedData 多算法 | ✓ | ✓（主路径 0/1/2） |
+| EnvelopedData 多算法 | ✓ | ✓（主路径 0/1/2，其中 0=默认 AES-128） |
 | 国密 GM CertRep（双证 + SKF） | ✓ | — |
 | ScepExt Enroll / GetCert 解析 | ✓ | ✓ |
 | CertAlias 编解码 | ✓ | — |
@@ -125,14 +125,14 @@ flowchart TB
 
 ### 5.3 BuildSuccessCertRep — EnvelopedData 算法
 
-与 [smallstep/pkcs7 ContentEncryptionAlgorithm](https://github.com/smallstep/pkcs7) 数值对齐；**0–2 为生产主路径**。
+与 `ScepEnvelopeCipher` 数值对齐；**0–2 为生产主路径**（其中 0 默认映射为 AES-128-CBC，6 表示禁用的 DES-CBC）。
 
 | 用例 | `envelope_cipher` | 算法 | 场景 |
 |------|-------------------|------|------|
-| `scep_build_success_certrep_des_cbc` | 0 | DES-CBC | smallstep / proto 默认 |
+| `scep_build_success_certrep_default_unspecified_to_aes128` | 1 | AES-128-CBC | 默认路径兼容（服务层 0→1） |
 | `scep_build_success_certrep_aes128_cbc` | 1 | AES-128-CBC | RFC 8894 推荐 |
 | `scep_build_success_certrep_aes256_cbc` | 2 | AES-256-CBC | step-ca 常用配置 |
-| `scep_build_success_certrep` | 0 | DES-CBC | 通用 SUCCESS 冒烟 |
+| `scep_build_success_certrep` | 1 | AES-128-CBC | 通用 SUCCESS 冒烟 |
 | `scep_build_success_certrep_extended_envelope_ciphers` | 3 / 4 / 5 | AES-GCM×2 + 3DES-CBC | 扩展互操作 |
 
 ### 5.4 BuildGmSuccessCertRep — 国密 Enroll SUCCESS
@@ -140,7 +140,7 @@ flowchart TB
 | 用例 | `envelope_cipher` | 外层 Envelop | 内层 |
 |------|-------------------|--------------|------|
 | `scep_build_gm_inner_signed_data_dual_cert_and_skf` | — | — | 双证 + SKF Base64 写入 eContent |
-| `scep_build_gm_success_certrep_des_cbc` | 0 | DES-CBC | 双证 + SKF |
+| `scep_build_gm_success_certrep_default_unspecified_to_aes128` | 1 | AES-128-CBC | 默认路径兼容（服务层 0→1） |
 | `scep_build_gm_success_certrep_aes128_cbc` | 1 | AES-128-CBC | 双证 + SKF |
 | `scep_build_gm_success_certrep_aes256_cbc` | 2 | AES-256-CBC | 双证 + SKF |
 | `scep_build_gm_success_certrep_des3_envelope` | 5 | 3DES-CBC | 双证 + SKF（MDM 常见） |
@@ -181,8 +181,8 @@ SCEP 扩展：CertAlias 编解码、SignedAttributes 提取、Enroll / GetCert P
 | 用例 | RPC | 验证点 |
 |------|-----|--------|
 | `grpc_scep_parse_request` | ParseRequest | 3DES PKIO fixture → csr + wrapper |
-| `grpc_scep_success_certrep` | BuildSuccessCertRep | 默认 DES-CBC SUCCESS CertRep 非空 |
-| `grpc_scep_success_certrep_envelope_ciphers` | BuildSuccessCertRep | **0 / 1 / 2** 三种 Envelop 均可构建 |
+| `grpc_scep_success_certrep` | BuildSuccessCertRep | 默认 AES-128-CBC SUCCESS CertRep 非空 |
+| `grpc_scep_success_certrep_envelope_ciphers` | BuildSuccessCertRep | **0 / 1 / 2** 三种配置可构建（0 映射为 AES-128） |
 | `grpc_scep_failure_certrep` | BuildFailureCertRep | FAILURE 非空 |
 | `grpc_scep_pending_certrep` | BuildPendingCertRep | PENDING 非空 |
 | `grpc_scep_certrep_verify` | BuildSuccessCertRep + CmsService.Verify | CertRep CMS 结构可被 CA 证书验签 |
@@ -207,7 +207,7 @@ SCEP SUCCESS CertRep 压测 mode 与单元测试 Envelop 算法对应关系：
 
 | Benchmark mode | `envelope_cipher` | 对应单元测试 |
 |----------------|-------------------|--------------|
-| `scep-certrep-success` | 0 DES-CBC | `scep_build_success_certrep_des_cbc` |
+| `scep-certrep-success` | 0（UNSPECIFIED→AES-128） | `scep_build_success_certrep_default_unspecified_to_aes128` |
 | `scep-certrep-success-aes128-cbc` | 1 | `scep_build_success_certrep_aes128_cbc` |
 | `scep-certrep-success-aes256-cbc` | 2 | `scep_build_success_certrep_aes256_cbc` |
 

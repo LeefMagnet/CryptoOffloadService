@@ -34,14 +34,17 @@ message ParseScepRequestResponse {
 }
 
 // CertRep 外层 EnvelopedData 对称算法。
-// 0–4 与 github.com/smallstep/pkcs7 ContentEncryptionAlgorithm 数值一致；5 为 SCEP 互操作常见的 3DES-CBC。
+// 0 表示未指定（服务端默认按 AES-128-CBC 处理）；1–5 为可用算法；
+// 6 为保留的 DES-CBC 旧值（服务端会拒绝）。
 enum ScepEnvelopeCipher {
-  SCEP_ENVELOPE_CIPHER_DES_CBC = 0;
+  SCEP_ENVELOPE_CIPHER_UNSPECIFIED = 0;
   SCEP_ENVELOPE_CIPHER_AES_128_CBC = 1;
   SCEP_ENVELOPE_CIPHER_AES_256_CBC = 2;
   SCEP_ENVELOPE_CIPHER_AES_128_GCM = 3;
   SCEP_ENVELOPE_CIPHER_AES_256_GCM = 4;
   SCEP_ENVELOPE_CIPHER_DES3_CBC = 5;
+  // 旧值保留用于兼容历史协议语义；服务端视为非法参数。
+  SCEP_ENVELOPE_CIPHER_DES_CBC_UNSUPPORTED = 6;
 }
 
 message BuildScepSuccessCertRepRequest {
@@ -53,7 +56,7 @@ message BuildScepSuccessCertRepRequest {
   bytes sender_nonce = 4;
   bytes issued_cert_der = 5;
   bytes wrapper_cert_der = 6;
-  // 外层 EnvelopedData 算法；省略时为 DES-CBC（smallstep 默认）
+  // 外层 EnvelopedData 算法；省略时服务端按 AES-128-CBC 处理（DES-CBC 不支持）
   ScepEnvelopeCipher envelope_cipher = 7;
 }
 
@@ -70,7 +73,7 @@ message BuildScepGmSuccessCertRepRequest {
   bytes skf_content = 7;
   // EnvelopedData 接收方（与 BuildSuccessCertRep 相同，通常为终端 wrapper RSA 证）
   bytes wrapper_cert_der = 8;
-  // 外层 EnvelopedData 算法；省略时为 DES-CBC（与 BuildSuccessCertRep 相同）
+  // 外层 EnvelopedData 算法；省略时服务端按 AES-128-CBC 处理（DES-CBC 不支持）
   ScepEnvelopeCipher envelope_cipher = 9;
 }
 

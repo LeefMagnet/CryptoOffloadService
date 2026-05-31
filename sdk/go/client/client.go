@@ -210,7 +210,7 @@ func (c *Client) ParseScepRequest(ctx context.Context, req *pb.ParseScepRequestR
 }
 
 // BuildScepSuccessCertRep 构建 SCEP SUCCESS CertRep。
-// envelope_cipher 见 pb.ScepEnvelopeCipher（与 smallstep/pkcs7 ContentEncryptionAlgorithm 0–5 对齐）。
+// envelope_cipher 见 pb.ScepEnvelopeCipher（0=UNSPECIFIED 默认映射 AES-128-CBC，6=DES-CBC 禁用）。
 func (c *Client) BuildScepSuccessCertRep(ctx context.Context, req *pb.BuildScepSuccessCertRepRequest) (*pb.BuildScepCertRepResponse, error) {
 	var resp *pb.BuildScepCertRepResponse
 	err := c.withConn(ctx, func(conn *pool.Conn) error {

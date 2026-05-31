@@ -93,7 +93,7 @@ flowchart LR
 ```
 
 - **ParseRequest**：外层 SignedData 验签 + 内层 Envelop 解密 → `csr_der`、`wrapper_cert_der`
-- **BuildSuccessCertRep**：pkiStatus=0，EnvelopedData 算法由 `envelope_cipher` 指定（默认 DES-CBC，与 smallstep 一致）
+- **BuildSuccessCertRep**：pkiStatus=0，EnvelopedData 算法由 `envelope_cipher` 指定（默认 AES-128-CBC；DES-CBC 不支持）
 - **BuildFailureCertRep**：pkiStatus=2，无 Envelop，含 failInfo + failInfoText
 - **BuildPendingCertRep**：pkiStatus=3，无 Envelop / failInfo，待人工审批
 - **业务侧保留**：CSR 策略、审批、证书模板、HTTP/SCEP 协议层

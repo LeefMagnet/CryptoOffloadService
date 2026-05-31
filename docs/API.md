@@ -633,18 +633,19 @@ SCEP offload 与 `CmsService` 同级，面向 RFC 8894 PKIO/CertRep 路径。完
 | `sender_nonce` | bytes | 否 | 响应 senderNonce；空则自动生成 16 字节 |
 | `issued_cert_der` | bytes | 是 | RA 签发的终端证书 DER |
 | `wrapper_cert_der` | bytes | 是 | wrapper 证书 DER（Envelop 接收方） |
-| `envelope_cipher` | enum | 否 | 外层 EnvelopedData 算法，见下表；省略时为 `DES_CBC`（与 smallstep/pkcs7 默认一致） |
+| `envelope_cipher` | enum | 否 | 外层 EnvelopedData 算法，见下表；省略时按 `AES_128_CBC` 处理（`DES_CBC` 不支持） |
 
-**`ScepEnvelopeCipher`（与 [smallstep/pkcs7 ContentEncryptionAlgorithm](https://github.com/smallstep/pkcs7) 数值对齐）**
+**`ScepEnvelopeCipher`（0 为服务端默认值，1–5 为可用算法，6 为禁用 DES-CBC 枚举）**
 
 | 值 | 枚举名 | 算法 | 说明 |
 |----|--------|------|------|
-| 0 | `DES_CBC` | DES-CBC | smallstep 默认；legacy |
+| 0 | `UNSPECIFIED` | 默认映射到 AES-128-CBC | 服务端归一化默认值 |
 | 1 | `AES_128_CBC` | AES-128-CBC | RFC 8894 推荐 |
 | 2 | `AES_256_CBC` | AES-256-CBC | step-ca 可选 |
 | 3 | `AES_128_GCM` | AES-128-GCM | step-ca 可选 |
 | 4 | `AES_256_GCM` | AES-256-GCM | step-ca 可选 |
 | 5 | `DES3_CBC` | 3DES-CBC | SCEP 互操作常见（GetCACaps `DES3`）；非 smallstep 加密 enum，解密端支持 |
+| 6 | `DES_CBC_UNSUPPORTED` | DES-CBC（禁用） | 服务端返回 `INVALID_ARGUMENT` |
 
 > Go RA 建议：Enroll 请求 EnvelopedData 用什么 OID，CertRep 就传相同 `envelope_cipher`。对接 Apple/老 MDM 常用 `DES3_CBC`（5）或 `AES_128_CBC`（1）。
 

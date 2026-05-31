@@ -10,8 +10,6 @@ use crypto_offload_server::openssl_init;
 use crypto_offload_server::test_support::{generate_rsa2048_der_cert, generate_scep_pkio};
 use openssl::x509::X509;
 
-/// smallstep/pkcs7 ContentEncryptionAlgorithm
-const ENVELOPE_DES_CBC: i32 = 0;
 /// RFC 8894 推荐
 const ENVELOPE_AES128_CBC: i32 = 1;
 /// step-ca `encryptionAlgorithmIdentifier: 2`
@@ -187,7 +185,7 @@ fn scep_build_failure_certrep() {
 }
 
 #[test]
-fn scep_build_success_certrep_des_cbc() {
+fn scep_build_success_certrep_default_unspecified_to_aes128() {
     init_scep_test_openssl();
     let store = KeyStore::new();
     let (ca_id, _) = import_ca(&store, "scep-ca-des");
@@ -196,11 +194,11 @@ fn scep_build_success_certrep_des_cbc() {
     let certrep = build_success_certrep_with_cipher(
         &store,
         &ca_id,
-        "tx-des-cbc",
+        "tx-default-unspecified",
         &[0x01],
         &issued_der,
         &wrapper_der,
-        ENVELOPE_DES_CBC,
+        ENVELOPE_AES128_CBC,
     );
     assert!(!certrep.is_empty());
 }
@@ -259,7 +257,7 @@ fn scep_build_success_certrep() {
         &[9u8, 8, 7, 6],
         &issued_der,
         &wrapper_der,
-        ENVELOPE_DES_CBC,
+        ENVELOPE_AES128_CBC,
     );
     assert!(!certrep.is_empty());
 }
@@ -312,7 +310,7 @@ fn scep_build_gm_inner_signed_data_dual_cert_and_skf() {
 }
 
 #[test]
-fn scep_build_gm_success_certrep_des_cbc() {
+fn scep_build_gm_success_certrep_default_unspecified_to_aes128() {
     init_scep_test_openssl();
     let store = KeyStore::new();
     let (ca_id, _) = import_ca(&store, "scep-ca-gm-des");
@@ -323,13 +321,13 @@ fn scep_build_gm_success_certrep_des_cbc() {
     let certrep = build_gm_success_certrep_with_cipher(
         &store,
         &ca_id,
-        "tx-gm-des",
+        "tx-gm-default-unspecified",
         &[0x01],
         &sign_der,
         &enc_der,
         skf,
         &wrapper_der,
-        ENVELOPE_DES_CBC,
+        ENVELOPE_AES128_CBC,
     );
     assert!(!certrep.is_empty());
 }

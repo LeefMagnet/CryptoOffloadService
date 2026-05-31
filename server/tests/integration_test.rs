@@ -891,9 +891,9 @@ async fn grpc_scep_success_certrep_envelope_ciphers() {
         .into_inner();
     let ca_id = ca.metadata.expect("metadata").key_id;
 
-    // 0=DES-CBC（smallstep 默认），1=AES-128-CBC（RFC 8894），2=AES-256-CBC（step-ca）
+    // 0=UNSPECIFIED（服务端默认映射到 AES-128-CBC），1=AES-128-CBC（RFC 8894），2=AES-256-CBC（step-ca）
     for (cipher, label) in [
-        (0, "des-cbc"),
+        (0, "unspecified-default"),
         (1, "aes128-cbc"),
         (2, "aes256-cbc"),
     ] {

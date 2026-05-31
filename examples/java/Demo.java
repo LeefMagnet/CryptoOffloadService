@@ -93,7 +93,7 @@ public final class Demo {
  * 每条 HTTP 请求在虚拟线程里调用 {@code parseEnrollPkio}，RA 完成后在同一线程或
  * 另一虚拟线程调用 {@code buildScepSuccessCertRep}；不同事务之间无共享可变状态。
  * CertRep 的 {@code envelope_cipher} 应与 Enroll PKIO Envelop 算法一致（见
- * {@code ScepEnvelopeCipher}：0=DES-CBC，1=AES-128-CBC，2=AES-256-CBC，5=3DES-CBC）。
+ * {@code ScepEnvelopeCipher}：0=UNSPECIFIED(服务端默认AES-128-CBC)，1=AES-128-CBC，2=AES-256-CBC，5=3DES-CBC，6=DES-CBC(禁用)）。
  * 国密路径使用 {@code buildScepGmSuccessCertRep}，同样设置 {@code envelope_cipher}。
  */
     private static void demoConcurrentSigns(CryptoOffloadClient client, String keyId) throws Exception {

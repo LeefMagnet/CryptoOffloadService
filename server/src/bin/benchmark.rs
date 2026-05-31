@@ -31,7 +31,7 @@ use cryptooffload::v1::{
     ParseScepRequestRequest, SignAlgorithm, SignRequest, VerifyCmsRequest, VerifyRequest,
 };
 
-const ENVELOPE_DES_CBC: i32 = 0;
+const ENVELOPE_UNSPECIFIED: i32 = 0;
 const ENVELOPE_AES128_CBC: i32 = 1;
 const ENVELOPE_AES256_CBC: i32 = 2;
 
@@ -51,9 +51,9 @@ enum BenchMode {
     CmsParse,
     CmsVerify,
     CmsBuildParse,
-    /// SCEP SUCCESS CertRep，DES-CBC Envelop（smallstep 默认；同 `scep-certrep-success`）
+    /// SCEP SUCCESS CertRep，默认算法（UNSPECIFIED->AES-128-CBC；同 `scep-certrep-success`）
     #[value(name = "scep-certrep-success")]
-    ScepCertrepSuccessDesCbc,
+    ScepCertrepSuccessDefault,
     /// SCEP SUCCESS CertRep，AES-128-CBC Envelop（RFC 8894 推荐）
     #[value(name = "scep-certrep-success-aes128-cbc")]
     ScepCertrepSuccessAes128Cbc,
@@ -350,7 +350,7 @@ async fn prepare_keys(channel: &Channel, args: &Args, payload: &[u8]) -> Result<
         &recipient_nonce,
         &issued_cert_der,
         &pkio_wrapper_cert_der,
-        ENVELOPE_DES_CBC,
+        ENVELOPE_UNSPECIFIED,
     );
     let scep_success_certrep_der = scep_client
         .build_success_cert_rep(scep_success_req)
@@ -699,8 +699,8 @@ async fn run_one(channel: &Channel, mode: BenchMode, keys: &BenchKeys) -> Result
                 })
                 .await?;
         }
-        BenchMode::ScepCertrepSuccessDesCbc => {
-            scep_build_success_certrep(channel, keys, ENVELOPE_DES_CBC).await?;
+        BenchMode::ScepCertrepSuccessDefault => {
+            scep_build_success_certrep(channel, keys, ENVELOPE_UNSPECIFIED).await?;
         }
         BenchMode::ScepCertrepSuccessAes128Cbc => {
             scep_build_success_certrep(channel, keys, ENVELOPE_AES128_CBC).await?;
@@ -762,7 +762,7 @@ async fn run_one(channel: &Channel, mode: BenchMode, keys: &BenchKeys) -> Result
                     &keys.recipient_nonce,
                     &keys.issued_cert_der,
                     &parsed.wrapper_cert_der,
-                    ENVELOPE_DES_CBC,
+                    ENVELOPE_UNSPECIFIED,
                 ))
                 .await?;
         }

@@ -21,6 +21,23 @@ use crate::service_validators::{
     validate_scep_pending_request, validate_scep_success_request,
 };
 
+const SCEP_ENVELOPE_CIPHER_UNSPECIFIED: i32 = 0;
+const SCEP_ENVELOPE_CIPHER_AES_128_CBC: i32 = 1;
+const SCEP_ENVELOPE_CIPHER_DES_CBC_UNSUPPORTED: i32 = 6;
+
+fn normalize_scep_envelope_cipher(requested: i32) -> Result<i32, Status> {
+    // proto3 enum 在字段省略时会传 0。服务端将默认值升级为 AES-128-CBC。
+    if requested == SCEP_ENVELOPE_CIPHER_UNSPECIFIED {
+        return Ok(SCEP_ENVELOPE_CIPHER_AES_128_CBC);
+    }
+    if requested == SCEP_ENVELOPE_CIPHER_DES_CBC_UNSUPPORTED {
+        return Err(Status::invalid_argument(
+            "SCEP_ENVELOPE_CIPHER_DES_CBC is unsupported; use AES_128_CBC/AES_256_CBC/AES_GCM/DES3_CBC",
+        ));
+    }
+    Ok(requested)
+}
+
 
 pub struct AppState {
     pub keys: KeyStore,
@@ -349,7 +366,7 @@ impl ScepService for ScepServiceImpl {
         let sender_nonce = req.sender_nonce;
         let issued_cert_der = req.issued_cert_der;
         let wrapper_cert_der = req.wrapper_cert_der;
-        let envelope_cipher = req.envelope_cipher;
+        let envelope_cipher = normalize_scep_envelope_cipher(req.envelope_cipher)?;
         let state = self.state.clone();
         let certrep_der = run_crypto(&state, move || {
             crypto_scep::build_success_certrep(
@@ -385,7 +402,7 @@ impl ScepService for ScepServiceImpl {
         let encryption_cert_der = req.encryption_cert_der;
         let skf_content = req.skf_content;
         let wrapper_cert_der = req.wrapper_cert_der;
-        let envelope_cipher = req.envelope_cipher;
+        let envelope_cipher = normalize_scep_envelope_cipher(req.envelope_cipher)?;
         let state = self.state.clone();
         let certrep_der = run_crypto(&state, move || {
             crypto_scep::build_gm_success_certrep(
@@ -559,4 +576,33 @@ impl ScepExtService for ScepExtServiceImpl {
         }))
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        normalize_scep_envelope_cipher, SCEP_ENVELOPE_CIPHER_AES_128_CBC,
+        SCEP_ENVELOPE_CIPHER_DES_CBC_UNSUPPORTED, SCEP_ENVELOPE_CIPHER_UNSPECIFIED,
+    };
+
+    #[test]
+    fn normalize_scep_envelope_cipher_defaults_to_aes128cbc() {
+        assert_eq!(
+            normalize_scep_envelope_cipher(SCEP_ENVELOPE_CIPHER_UNSPECIFIED).expect("normalize"),
+            SCEP_ENVELOPE_CIPHER_AES_128_CBC
+        );
+    }
+
+    #[test]
+    fn normalize_scep_envelope_cipher_keeps_non_default_value() {
+        assert_eq!(normalize_scep_envelope_cipher(2).expect("normalize"), 2);
+        assert_eq!(normalize_scep_envelope_cipher(5).expect("normalize"), 5);
+    }
+
+    #[test]
+    fn normalize_scep_envelope_cipher_rejects_des_cbc_unsupported() {
+        let err = normalize_scep_envelope_cipher(SCEP_ENVELOPE_CIPHER_DES_CBC_UNSUPPORTED)
+            .expect_err("des-cbc must be rejected");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
 }

@@ -269,15 +269,17 @@ fn rsa_encrypt_recipient_stack(wrapper: &X509Ref, ca_cert: &X509Ref) -> Result<S
 /// 与 smallstep/pkcs7 `ContentEncryptionAlgorithm`（0–4）及 SCEP 扩展 3DES（5）对齐。
 fn resolve_envelope_cipher(v: i32) -> Result<Cipher> {
     match v {
-        0 => Ok(Cipher::des_cbc()),
         1 => Ok(Cipher::aes_128_cbc()),
         2 => Ok(Cipher::aes_256_cbc()),
         3 => Ok(Cipher::aes_128_gcm()),
         4 => Ok(Cipher::aes_256_gcm()),
         5 => Ok(Cipher::des_ede3_cbc()),
+        6 => Err(anyhow!(
+            "unsupported envelope_cipher value: 6 (DES-CBC is disabled)"
+        )),
         _ => Err(anyhow!(
-            "unsupported envelope_cipher value: {v} (valid: 0=DES-CBC, 1=AES-128-CBC, \
-             2=AES-256-CBC, 3=AES-128-GCM, 4=AES-256-GCM, 5=3DES-CBC)"
+            "unsupported envelope_cipher value: {v} (valid: 1=AES-128-CBC, 2=AES-256-CBC, \
+             3=AES-128-GCM, 4=AES-256-GCM, 5=3DES-CBC; 0=UNSPECIFIED is normalized in service)"
         )),
     }
 }

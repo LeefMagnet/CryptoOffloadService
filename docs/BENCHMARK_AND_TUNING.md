@@ -125,7 +125,7 @@ python scripts/benchmark/bench_python.py --mode sign --clients 8
 | `sign-ed25519` / `sign-verify-ed25519` | Ed25519 签名/往返 | Ed25519 |
 | `sign-sm2` / `sign-verify-sm2` | SM2 签名/往返（需 OpenSSL 国密） | SM2 |
 | `scep-parse-request` | SCEP PKIO 解析：验签外层 + 解密 → `csr_der` + `wrapper_cert_der` | CA 私钥 + 启动时生成 PKIO fixture |
-| `scep-certrep-success` | SUCCESS CertRep 构建（DES-CBC，smallstep 默认） | CA + issued + wrapper |
+| `scep-certrep-success` | SUCCESS CertRep 构建（默认：UNSPECIFIED→AES-128-CBC） | CA + issued + wrapper |
 | `scep-certrep-success-aes128-cbc` | SUCCESS CertRep 构建（AES-128-CBC，RFC 8894） | 同上 |
 | `scep-certrep-success-aes256-cbc` | SUCCESS CertRep 构建（AES-256-CBC，step-ca） | 同上 |
 | `scep-certrep-failure` | FAILURE CertRep 构建 | CA |
@@ -157,7 +157,7 @@ python scripts/benchmark/bench_python.py --mode sign --clients 8
 | cms-parse | 6981 | 551 | 994 | |
 | cms-verify | 7228 | 528 | 984 | |
 | scep-parse-request | 3334 | 1704 | 3345 | PKIO 解析 + 外层验签 + 解密 CSR |
-| scep-certrep-success | 2608 | 1416 | 3209 | DES-CBC Envelop（smallstep 默认） |
+| scep-certrep-success | 2608 | 1416 | 3209 | 默认 Envelop（UNSPECIFIED→AES-128-CBC） |
 | scep-certrep-success-aes128-cbc | — | — | — | AES-128-CBC（RFC 8894）；待实测 |
 | scep-certrep-success-aes256-cbc | — | — | — | AES-256-CBC（step-ca）；待实测 |
 | scep-certrep-failure | 3086 | 1189 | 2818 | 无 Envelop，比 success 快 |

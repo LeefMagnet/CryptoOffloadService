@@ -102,6 +102,7 @@ struct BenchKeys {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    crypto_offload_server::openssl_init::init();
     let args = Args::parse();
     print_env_banner(&args);
 

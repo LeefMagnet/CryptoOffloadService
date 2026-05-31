@@ -180,6 +180,7 @@ pub mod test_support {
     /// 生成 SCEP PKIO 测试报文：外层 SignedData（wrapper 签名）+ 内层 EnvelopedData（3DES，CA 解密）。
     /// 返回 `(pkio_der, csr_der, wrapper_cert_der)`。
     pub fn generate_scep_pkio(ca_cert: &X509) -> anyhow::Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+        crate::openssl_init::init();
         use openssl::bn::BigNum;
         use openssl::pkcs7::{Pkcs7, Pkcs7Flags};
         use openssl::stack::Stack;

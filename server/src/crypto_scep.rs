@@ -14,6 +14,7 @@ use crate::scep_certrep::{
 };
 
 pub fn parse_request(scep_der: &[u8], access: KeyAccess) -> Result<(Vec<u8>, Vec<u8>)> {
+    crate::openssl_init::init();
     if scep_der.is_empty() {
         anyhow::bail!("scep_der must not be empty");
     }
@@ -43,6 +44,7 @@ pub fn build_success_certrep(
     issued_cert_der: &[u8],
     wrapper_cert_der: &[u8],
 ) -> Result<Vec<u8>> {
+    crate::openssl_init::init();
     let material = match &access {
         KeyAccess::Permanent(m) | KeyAccess::Temporary(m) => m,
     };
@@ -75,6 +77,7 @@ pub fn build_failure_certrep(
     fail_info: u8,
     fail_info_text: &str,
 ) -> Result<Vec<u8>> {
+    crate::openssl_init::init();
     let material = match &access {
         KeyAccess::Permanent(m) | KeyAccess::Temporary(m) => m,
     };

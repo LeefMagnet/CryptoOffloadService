@@ -1,7 +1,7 @@
 FROM rust:1.83-bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config libssl-dev protobuf-compiler \
+    pkg-config libssl-dev protobuf-compiler openssl-provider-legacy \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -22,7 +22,7 @@ RUN cargo build --release -p crypto-offload-server --bin crypto-offload-server -
 FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates libssl3 openssl \
+    ca-certificates libssl3 openssl openssl-provider-legacy \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/crypto-offload-server /usr/local/bin/
@@ -35,7 +35,7 @@ CMD ["--listen", "0.0.0.0:50051"]
 FROM debian:bookworm-slim AS test-runner
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates libssl3 openssl bash \
+    ca-certificates libssl3 openssl openssl-provider-legacy bash \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/crypto-offload-benchmark /usr/local/bin/

@@ -132,7 +132,10 @@ pub fn decrypt_envelope_password(enveloped_der: &[u8], password: &str) -> Result
     }
 }
 
-/// Returns true when the first CMS recipient is `PasswordRecipientInfo`.
+/// Returns true when any CMS recipient is `PasswordRecipientInfo`.
+///
+/// Some senders may include multiple recipients (mixed recipient types),
+/// so we must scan the full recipient set instead of checking index 0 only.
 pub fn enveloped_uses_password_recipient(enveloped_der: &[u8]) -> Result<bool> {
     unsafe {
         ffi::init();
@@ -145,14 +148,20 @@ pub fn enveloped_uses_password_recipient(enveloped_der: &[u8]) -> Result<bool> {
 
 unsafe fn first_recipient_is_password(cms: *mut ffi::CMS_ContentInfo) -> Result<bool> {
     let infos = CMS_get0_RecipientInfos(cms);
-    if infos.is_null() || OPENSSL_sk_num(infos) < 1 {
+    if infos.is_null() {
         return Ok(false);
     }
-    let ri = OPENSSL_sk_value(infos, 0);
-    if ri.is_null() {
+    let count = OPENSSL_sk_num(infos);
+    if count <= 0 {
         return Ok(false);
     }
-    Ok(CMS_RecipientInfo_type(ri) == CMS_RECIPINFO_PASS)
+    for i in 0..count {
+        let ri = OPENSSL_sk_value(infos, i);
+        if !ri.is_null() && CMS_RecipientInfo_type(ri) == CMS_RECIPINFO_PASS {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 unsafe fn decrypt_cms_password(cms: *mut ffi::CMS_ContentInfo, password: &str) -> Result<Vec<u8>> {

@@ -16,14 +16,22 @@ use crate::pb::sign_service_server::SignService;
 use crate::pb::*;
 use crate::service_errors::{map_crypto_err, map_key_store_err};
 use crate::service_validators::{
-    ensure_small_packet, validate_cms_build_request,
-    validate_scep_failure_request, validate_scep_gm_success_request,
+    ensure_small_packet, validate_cms_build_request, validate_challenge_password_field,
+    validate_parse_scep_request, validate_scep_failure_request, validate_scep_gm_success_request,
     validate_scep_pending_request, validate_scep_success_request,
 };
 
 const SCEP_ENVELOPE_CIPHER_UNSPECIFIED: i32 = 0;
 const SCEP_ENVELOPE_CIPHER_AES_128_CBC: i32 = 1;
 const SCEP_ENVELOPE_CIPHER_DES_CBC_UNSUPPORTED: i32 = 6;
+
+fn optional_password_ref(password: &str) -> Option<&str> {
+    if password.is_empty() {
+        None
+    } else {
+        Some(password)
+    }
+}
 
 fn normalize_scep_envelope_cipher(requested: i32) -> Result<i32, Status> {
     // proto3 enum 在字段省略时会传 0。服务端将默认值升级为 AES-128-CBC。
@@ -333,16 +341,20 @@ impl ScepService for ScepServiceImpl {
         request: Request<ParseScepRequestRequest>,
     ) -> Result<Response<ParseScepRequestResponse>, Status> {
         let req = request.into_inner();
-        ensure_small_packet("scep_der", &req.scep_der)?;
+        validate_parse_scep_request(&req)?;
         let access = self
             .state
             .keys
             .access_key(&req.ca_key_id)
             .map_err(map_key_store_err)?;
         let scep_der = req.scep_der;
+        let challenge_password = req.challenge_password;
         let state = self.state.clone();
-        let parsed =
-            run_crypto(&state, move || crypto_scep::parse_request(&scep_der, access)).await?;
+        let parsed = run_crypto(&state, move || {
+            let cp = optional_password_ref(&challenge_password);
+            crypto_scep::parse_request(&scep_der, access, cp)
+        })
+        .await?;
 
         Ok(Response::new(ParseScepRequestResponse {
             csr_der: parsed.0,
@@ -366,6 +378,7 @@ impl ScepService for ScepServiceImpl {
         let sender_nonce = req.sender_nonce;
         let issued_cert_der = req.issued_cert_der;
         let wrapper_cert_der = req.wrapper_cert_der;
+        let challenge_password = req.challenge_password;
         let envelope_cipher = normalize_scep_envelope_cipher(req.envelope_cipher)?;
         let state = self.state.clone();
         let certrep_der = run_crypto(&state, move || {
@@ -377,6 +390,7 @@ impl ScepService for ScepServiceImpl {
                 &issued_cert_der,
                 &wrapper_cert_der,
                 envelope_cipher,
+                optional_password_ref(&challenge_password),
             )
         })
         .await?;
@@ -402,6 +416,7 @@ impl ScepService for ScepServiceImpl {
         let encryption_cert_der = req.encryption_cert_der;
         let skf_content = req.skf_content;
         let wrapper_cert_der = req.wrapper_cert_der;
+        let challenge_password = req.challenge_password;
         let envelope_cipher = normalize_scep_envelope_cipher(req.envelope_cipher)?;
         let state = self.state.clone();
         let certrep_der = run_crypto(&state, move || {
@@ -415,6 +430,7 @@ impl ScepService for ScepServiceImpl {
                 &skf_content,
                 &wrapper_cert_der,
                 envelope_cipher,
+                optional_password_ref(&challenge_password),
             )
         })
         .await?;
@@ -508,15 +524,21 @@ impl ScepExtService for ScepExtServiceImpl {
     ) -> Result<Response<ParseGetCertPkioResponse>, Status> {
         let req = request.into_inner();
         ensure_small_packet("scep_der", &req.scep_der)?;
+        validate_challenge_password_field(&req.challenge_password)?;
         let access = self
             .state
             .keys
             .access_key(&req.ca_key_id)
             .map_err(map_key_store_err)?;
         let scep_der = req.scep_der;
+        let challenge_password = req.challenge_password;
         let state = self.state.clone();
         let resp = run_crypto(&state, move || {
-            crypto_scep_ext::parse_getcert_pkio(&scep_der, access)
+            crypto_scep_ext::parse_getcert_pkio(
+                &scep_der,
+                access,
+                optional_password_ref(&challenge_password),
+            )
         })
         .await?;
         Ok(Response::new(resp))
@@ -528,15 +550,21 @@ impl ScepExtService for ScepExtServiceImpl {
     ) -> Result<Response<ParseEnrollPkioResponse>, Status> {
         let req = request.into_inner();
         ensure_small_packet("scep_der", &req.scep_der)?;
+        validate_challenge_password_field(&req.challenge_password)?;
         let access = self
             .state
             .keys
             .access_key(&req.ca_key_id)
             .map_err(map_key_store_err)?;
         let scep_der = req.scep_der;
+        let challenge_password = req.challenge_password;
         let state = self.state.clone();
         let resp = run_crypto(&state, move || {
-            crypto_scep_ext::parse_enroll_pkio(&scep_der, access)
+            crypto_scep_ext::parse_enroll_pkio(
+                &scep_der,
+                access,
+                optional_password_ref(&challenge_password),
+            )
         })
         .await?;
         Ok(Response::new(resp))
@@ -600,6 +628,23 @@ mod tests {
     }
 
     #[test]
+    fn validate_scep_success_allows_password_without_wrapper() {
+        use crate::pb::BuildScepSuccessCertRepRequest;
+        use crate::service_validators::validate_scep_success_request;
+
+        let req = BuildScepSuccessCertRepRequest {
+            ca_key_id: "ca".into(),
+            transaction_id: "tx".into(),
+            recipient_nonce: vec![1, 2, 3, 4],
+            issued_cert_der: vec![0x30],
+            wrapper_cert_der: vec![],
+            envelope_cipher: SCEP_ENVELOPE_CIPHER_AES_128_CBC,
+            challenge_password: "high-entropy-shared-secret".into(),
+            sender_nonce: vec![],
+        };
+        validate_scep_success_request(&req).expect("password envelope without wrapper");
+    }
+
     fn normalize_scep_envelope_cipher_rejects_des_cbc_unsupported() {
         let err = normalize_scep_envelope_cipher(SCEP_ENVELOPE_CIPHER_DES_CBC_UNSUPPORTED)
             .expect_err("des-cbc must be rejected");

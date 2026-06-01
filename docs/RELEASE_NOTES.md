@@ -9,11 +9,19 @@
 
 | 版本 | 说明 | 详情 |
 |------|------|------|
+| `0.2.3` | SCEP challengePassword / PasswordRecipientInfo（RFC 8894 §3.1） | [RELEASE_NOTES_0.2.3.md](./RELEASE_NOTES_0.2.3.md) |
 | `0.2.2` | 架构美学重构（服务层解耦 + FFI 边界收口）与版本升级 | [RELEASE_NOTES_0.2.2.md](./RELEASE_NOTES_0.2.2.md) |
 | `0.2.1` | CMS 验签语义收紧、SCEP DER 边界加固与回归测试补全 | 见下方摘要 |
 | `0.2.0` | ScepExtService 引入，SCEP 扩展能力进入稳定分支 | 见下方摘要 |
 
 ---
+
+## 0.2.3
+
+- 主题：SCEP 口令信封（PasswordRecipientInfo），适配仅 ECDSA wrapper、无 RSA 加密钥的 Enroll/CertRep。
+- 关键改动：Proto 增加 `challenge_password`；服务端 pwri 加解密；口令模式下可省略 `wrapper_cert_der`。
+- 测试：`cargo test -p crypto-offload-server` 全量通过（含 3 个 pwri 专项用例）。
+- 详情：[RELEASE_NOTES_0.2.3.md](./RELEASE_NOTES_0.2.3.md)。
 
 ## 0.2.2
 

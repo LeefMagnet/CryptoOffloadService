@@ -110,14 +110,15 @@ fn scep_ext_parse_enroll_pkio() {
         .expect("import");
     let access = store.access_key(&meta.key_id).expect("access");
 
-    let resp = crypto_scep_ext::parse_enroll_pkio(&pkio, access).expect("parse enroll");
+    let resp = crypto_scep_ext::parse_enroll_pkio(&pkio, access, None).expect("parse enroll");
     assert_eq!(resp.csr_der, expected_csr);
     assert_eq!(resp.wrapper_cert_der, expected_wrapper);
     assert!(resp.attributes.is_some());
 
     // 与 ScepService.ParseRequest 结果一致
     let access2 = store.access_key(&meta.key_id).expect("access");
-    let (csr2, wrapper2) = crypto_scep::parse_request(&pkio, access2).expect("parse request");
+    let (csr2, wrapper2) =
+        crypto_scep::parse_request(&pkio, access2, None).expect("parse request");
     assert_eq!(resp.csr_der, csr2);
     assert_eq!(resp.wrapper_cert_der, wrapper2);
 }
@@ -149,7 +150,7 @@ fn scep_ext_parse_getcert_pkio() {
         )
         .expect("import");
     let access = store.access_key(&meta.key_id).expect("access");
-    let resp = crypto_scep_ext::parse_getcert_pkio(&pkio, access).expect("parse getcert");
+    let resp = crypto_scep_ext::parse_getcert_pkio(&pkio, access, None).expect("parse getcert");
     assert_eq!(resp.content_type, 1);
     assert_eq!(resp.alias_or_cn, "iot-device-001");
     assert!(!resp.wrapper_cert_der.is_empty());

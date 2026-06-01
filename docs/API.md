@@ -603,7 +603,10 @@ SCEP offload 与 `CmsService` 同级，面向 RFC 8894 PKIO/CertRep 路径。完
 
 ### 6.1 ParseRequest
 
-解析 SCEP PKIO：外层 SignedData 提取 wrapper 证书 + 内层 EnvelopedData 用 CA 解密得到 CSR。
+解析 SCEP PKIO：外层 SignedData 提取 wrapper 证书 + 内层 EnvelopedData 解密得到 CSR。
+
+- 内层为 **RSA KeyTrans**（常见 Enroll → CA RSA）时：用 `ca_key_id` 对应 CA 私钥解密；**无需** `challenge_password`。
+- 内层为 **PasswordRecipientInfo**（RFC 8894 §3.1，终端仅 ECDSA 等签名钥）时：必须传 `challenge_password`（与 PKCS#10 `challengePassword` 一致）。
 
 **请求 `ParseScepRequestRequest`**
 
@@ -611,6 +614,7 @@ SCEP offload 与 `CmsService` 同级，面向 RFC 8894 PKIO/CertRep 路径。完
 |------|------|------|
 | `scep_der` | bytes | SCEP PKIO DER |
 | `ca_key_id` | string | CA 私钥 key_id（含 certificate_data） |
+| `challenge_password` | string | PasswordRecipientInfo 时必填；RSA Envelope 时可省略 |
 
 **响应 `ParseScepRequestResponse`**
 
@@ -632,8 +636,9 @@ SCEP offload 与 `CmsService` 同级，面向 RFC 8894 PKIO/CertRep 路径。完
 | `recipient_nonce` | bytes | 是 | 请求 senderNonce |
 | `sender_nonce` | bytes | 否 | 响应 senderNonce；空则自动生成 16 字节 |
 | `issued_cert_der` | bytes | 是 | RA 签发的终端证书 DER |
-| `wrapper_cert_der` | bytes | 是 | wrapper 证书 DER（Envelop 接收方） |
-| `envelope_cipher` | enum | 否 | 外层 EnvelopedData 算法，见下表；省略时按 `AES_128_CBC` 处理（`DES_CBC` 不支持） |
+| `wrapper_cert_der` | bytes | 条件 | RSA Envelope 时必填（wrapper RSA 公钥）；PasswordRecipientInfo 时可省略 |
+| `envelope_cipher` | enum | 否 | 外层 EnvelopedData **对称**算法，见下表；省略时按 `AES_128_CBC` 处理（`DES_CBC` 不支持） |
+| `challenge_password` | string | 条件 | 非空时外层使用 **PasswordRecipientInfo**（RFC 8894 §3.1），与 Enroll 共享口令一致；无需 SMS 二次下发 |
 
 **`ScepEnvelopeCipher`（0 为服务端默认值，1–5 为可用算法，6 为禁用 DES-CBC 枚举）**
 
@@ -657,7 +662,7 @@ SCEP offload 与 `CmsService` 同级，面向 RFC 8894 PKIO/CertRep 路径。完
 
 ### 6.2.1 BuildGmSuccessCertRep（国密 Enroll SUCCESS）
 
-一次 RPC 构建完整国密 SUCCESS CertRep。外层与标准 SCEP 相同（CA 签名 + EnvelopedData 加密给 `wrapper_cert` RSA 公钥）；**国密差异仅在内层** EnvelopedData 明文。`envelope_cipher` 语义与 §6.2 相同。
+一次 RPC 构建完整国密 SUCCESS CertRep。外层与标准 SCEP 相同（CA 签名 + EnvelopedData）；默认 **RSA KeyTrans → wrapper_cert**，或设置 `challenge_password` 使用 **PasswordRecipientInfo**。**国密差异仅在内层** EnvelopedData 明文。`envelope_cipher` 语义与 §6.2 相同。
 
 **内层 SignedData（客户端 `reply_p7`）**
 
@@ -679,8 +684,9 @@ SCEP offload 与 `CmsService` 同级，面向 RFC 8894 PKIO/CertRep 路径。完
 | `sign_cert_der` | bytes | 是 | 签名证 DER |
 | `encryption_cert_der` | bytes | 是 | 加密证 DER |
 | `skf_content` | bytes | 是 | SKF Base64 字符串（RA opaque 传入） |
-| `wrapper_cert_der` | bytes | 是 | EnvelopedData RSA 接收方（通常终端 wrapper 证） |
-| `envelope_cipher` | enum | 否 | 外层 EnvelopedData 算法，见 §6.2 `ScepEnvelopeCipher` |
+| `wrapper_cert_der` | bytes | 条件 | RSA Envelope 时必填；PasswordRecipientInfo 时可省略 |
+| `envelope_cipher` | enum | 否 | 外层 EnvelopedData 对称算法，见 §6.2 `ScepEnvelopeCipher` |
+| `challenge_password` | string | 条件 | 非空时 PasswordRecipientInfo，语义同 §6.2 |
 
 **响应** 同 `BuildScepCertRepResponse`（`certrep_der`）。
 

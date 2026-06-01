@@ -23,7 +23,7 @@
 | | `DeleteKey` / `GetKeyInfo` / `ListKeys` | 密钥生命周期管理 |
 | **SignService** | `Sign` / `Verify` | RSA / ECDSA / **SM2** / **Ed25519** 签名/验签 |
 | **CmsService** | `Parse` / `Build` / `Verify` | CMS/PKCS#7 解析、封装、验签 |
-| **ScepService** | `ParseRequest` / `BuildSuccessCertRep` / `BuildFailureCertRep` / `BuildPendingCertRep` | SCEP PKIO 解析与 CertRep 构建 |
+| **ScepService** | `ParseRequest` / `BuildSuccessCertRep` / `BuildFailureCertRep` / `BuildPendingCertRep` | SCEP PKIO 解析与 CertRep 构建（支持 `challenge_password` / PasswordRecipientInfo，RFC 8894 §3.1） |
 
 ### 密钥管理（类 KMS）
 

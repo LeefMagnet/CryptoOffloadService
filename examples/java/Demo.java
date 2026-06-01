@@ -2,14 +2,14 @@ package com.cryptooffload.examples;
 
 import com.cryptooffload.sdk.CryptoOffloadClient;
 import com.cryptooffload.sdk.GrpcConnectionPool;
-import cryptooffload.v1.Common.HashAlgorithm;
-import cryptooffload.v1.Common.KeyFormat;
-import cryptooffload.v1.Common.KeyKind;
-import cryptooffload.v1.Common.KeyLifetime;
-import cryptooffload.v1.Common.SignAlgorithm;
-import cryptooffload.v1.KeyServiceOuterClass.ImportKeyRequest;
-import cryptooffload.v1.SignServiceOuterClass.SignRequest;
-import cryptooffload.v1.SignServiceOuterClass.SignResponse;
+import cryptooffload.v1.HashAlgorithm;
+import cryptooffload.v1.ImportKeyRequest;
+import cryptooffload.v1.KeyFormat;
+import cryptooffload.v1.KeyKind;
+import cryptooffload.v1.KeyLifetime;
+import cryptooffload.v1.SignAlgorithm;
+import cryptooffload.v1.SignRequest;
+import cryptooffload.v1.SignResponse;
 
 import java.util.ArrayList;
 import java.util.List;

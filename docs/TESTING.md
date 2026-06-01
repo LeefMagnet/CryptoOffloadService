@@ -114,7 +114,10 @@ flowchart TB
 | 用例 | 验证点 |
 |------|--------|
 | `scep_parse_request_3des_pkio` | 3DES EnvelopedData PKIO → `csr_der` + `wrapper_cert_der` 与 fixture 一致 |
+| `scep_parse_request_password_pkio` | PasswordRecipientInfo PKIO + `challenge_password` → 明文 CSR |
 | `scep_parse_then_build_success_3des_roundtrip` | ParseRequest → BuildSuccessCertRep（3DES Envelop）连贯路径 |
+| `scep_password_envelope_roundtrip` | CMS pwri 加解密往返 |
+| `scep_build_success_certrep_password_envelope` | `challenge_password` 构建 CertRep，内层为 pwri |
 
 ### 5.2 CertRep 状态码
 

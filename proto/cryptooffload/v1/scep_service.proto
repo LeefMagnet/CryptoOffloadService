@@ -26,6 +26,8 @@ message ParseScepRequestRequest {
   bytes scep_der = 1;
   // CA 私钥 key_id（ImportKey 时需附带 CA 证书 certificate_data）
   string ca_key_id = 2;
+  // 内层 EnvelopedData 为 PasswordRecipientInfo 时必填（RFC 8894 §3.1，与 PKCS#10 challengePassword 一致）
+  string challenge_password = 3;
 }
 
 message ParseScepRequestResponse {
@@ -58,6 +60,8 @@ message BuildScepSuccessCertRepRequest {
   bytes wrapper_cert_der = 6;
   // 外层 EnvelopedData 算法；省略时服务端按 AES-128-CBC 处理（DES-CBC 不支持）
   ScepEnvelopeCipher envelope_cipher = 7;
+  // 非空时外层 EnvelopedData 使用 PasswordRecipientInfo（终端无 RSA 加密钥时，RFC 8894 §3.1）
+  string challenge_password = 8;
 }
 
 // 国密 Enroll SUCCESS：内层 SignedData 含 [0]签名证、[1]加密证 + id-data(SKF Base64 字符串)；
@@ -75,6 +79,8 @@ message BuildScepGmSuccessCertRepRequest {
   bytes wrapper_cert_der = 8;
   // 外层 EnvelopedData 算法；省略时服务端按 AES-128-CBC 处理（DES-CBC 不支持）
   ScepEnvelopeCipher envelope_cipher = 9;
+  // 非空时外层 EnvelopedData 使用 PasswordRecipientInfo（与 Enroll 时 challengePassword 一致）
+  string challenge_password = 10;
 }
 
 message BuildScepFailureCertRepRequest {

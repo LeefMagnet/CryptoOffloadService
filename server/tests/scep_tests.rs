@@ -7,7 +7,9 @@ use crypto_offload_server::cryptooffload::v1::{KeyFormat, KeyKind, KeyLifetime};
 use crypto_offload_server::crypto_scep;
 use crypto_offload_server::key_store::KeyStore;
 use crypto_offload_server::openssl_init;
-use crypto_offload_server::test_support::{generate_rsa2048_der_cert, generate_scep_pkio};
+use crypto_offload_server::test_support::{
+    generate_rsa2048_der_cert, generate_scep_pkio, generate_scep_pkio_password,
+};
 use openssl::x509::X509;
 
 /// RFC 8894 推荐
@@ -52,6 +54,7 @@ fn build_success_certrep_with_cipher(
     issued_der: &[u8],
     wrapper_der: &[u8],
     envelope_cipher: i32,
+    challenge_password: Option<&str>,
 ) -> Vec<u8> {
     let access = store.access_key(ca_id).expect("access ca");
     crypto_scep::build_success_certrep(
@@ -62,6 +65,7 @@ fn build_success_certrep_with_cipher(
         issued_der,
         wrapper_der,
         envelope_cipher,
+        challenge_password,
     )
     .unwrap_or_else(|e| panic!("build SUCCESS CertRep cipher={envelope_cipher}: {e}"))
 }
@@ -76,6 +80,7 @@ fn build_gm_success_certrep_with_cipher(
     skf: &[u8],
     wrapper_der: &[u8],
     envelope_cipher: i32,
+    challenge_password: Option<&str>,
 ) -> Vec<u8> {
     let access = store.access_key(ca_id).expect("access ca");
     crypto_scep::build_gm_success_certrep(
@@ -88,6 +93,7 @@ fn build_gm_success_certrep_with_cipher(
         skf,
         wrapper_der,
         envelope_cipher,
+        challenge_password,
     )
     .unwrap_or_else(|e| panic!("build GM SUCCESS CertRep cipher={envelope_cipher}: {e}"))
 }
@@ -106,7 +112,7 @@ fn scep_parse_request_3des_pkio() {
 
     let access = store.access_key(&ca_id).expect("access ca");
     let (csr_der, wrapper_cert_der) =
-        crypto_scep::parse_request(&pkio_der, access).expect("parse 3DES SCEP PKIO");
+        crypto_scep::parse_request(&pkio_der, access, None).expect("parse 3DES SCEP PKIO");
 
     assert_eq!(csr_der, expected_csr, "decrypted CSR must match fixture");
     assert_eq!(
@@ -129,7 +135,7 @@ fn scep_parse_then_build_success_3des_roundtrip() {
 
     let access = store.access_key(&ca_id).expect("access ca");
     let (csr_der, wrapper_cert_der) =
-        crypto_scep::parse_request(&pkio_der, access).expect("parse PKIO");
+        crypto_scep::parse_request(&pkio_der, access, None).expect("parse PKIO");
     assert!(!csr_der.is_empty());
 
     let access = store.access_key(&ca_id).expect("access ca again");
@@ -141,6 +147,7 @@ fn scep_parse_then_build_success_3des_roundtrip() {
         &issued_der,
         &wrapper_cert_der,
         ENVELOPE_DES3_CBC,
+        None,
     )
     .expect("build SUCCESS CertRep with 3DES Envelop");
     assert!(!certrep.is_empty());
@@ -199,6 +206,7 @@ fn scep_build_success_certrep_default_unspecified_to_aes128() {
         &issued_der,
         &wrapper_der,
         ENVELOPE_AES128_CBC,
+        None,
     );
     assert!(!certrep.is_empty());
 }
@@ -218,6 +226,7 @@ fn scep_build_success_certrep_aes128_cbc() {
         &issued_der,
         &wrapper_der,
         ENVELOPE_AES128_CBC,
+        None,
     );
     assert!(!certrep.is_empty());
 }
@@ -237,6 +246,7 @@ fn scep_build_success_certrep_aes256_cbc() {
         &issued_der,
         &wrapper_der,
         ENVELOPE_AES256_CBC,
+        None,
     );
     assert!(!certrep.is_empty());
 }
@@ -258,6 +268,7 @@ fn scep_build_success_certrep() {
         &issued_der,
         &wrapper_der,
         ENVELOPE_AES128_CBC,
+        None,
     );
     assert!(!certrep.is_empty());
 }
@@ -284,6 +295,7 @@ fn scep_build_success_certrep_extended_envelope_ciphers() {
             &issued_der,
             &wrapper_der,
             cipher,
+            None,
         );
         assert!(!certrep.is_empty(), "cipher {cipher}");
     }
@@ -328,6 +340,7 @@ fn scep_build_gm_success_certrep_default_unspecified_to_aes128() {
         skf,
         &wrapper_der,
         ENVELOPE_AES128_CBC,
+        None,
     );
     assert!(!certrep.is_empty());
 }
@@ -351,6 +364,7 @@ fn scep_build_gm_success_certrep_aes128_cbc() {
         skf,
         &wrapper_der,
         ENVELOPE_AES128_CBC,
+        None,
     );
     assert!(!certrep.is_empty());
 }
@@ -374,6 +388,7 @@ fn scep_build_gm_success_certrep_aes256_cbc() {
         skf,
         &wrapper_der,
         ENVELOPE_AES256_CBC,
+        None,
     );
     assert!(!certrep.is_empty());
 }
@@ -398,6 +413,76 @@ fn scep_build_gm_success_certrep_des3_envelope() {
         skf,
         &wrapper_der,
         ENVELOPE_DES3_CBC,
+        None,
     );
     assert!(!certrep.is_empty());
+}
+
+#[test]
+fn scep_password_envelope_roundtrip() {
+    init_scep_test_openssl();
+    let plain = b"pkcs10-csr-placeholder-bytes";
+    let password = "device-shared-secret-32chars!!";
+    let env = crypto_offload_server::scep_password_envelope::encrypt_envelope_password(
+        plain,
+        password,
+        openssl::symm::Cipher::aes_128_cbc(),
+    )
+    .expect("encrypt password envelope");
+    let out = crypto_offload_server::scep_password_envelope::decrypt_envelope_password(
+        &env, password,
+    )
+    .expect("decrypt password envelope");
+    assert_eq!(out, plain);
+}
+
+#[test]
+fn scep_parse_request_password_pkio() {
+    init_scep_test_openssl();
+    let store = KeyStore::new();
+    let (ca_id, _ca_der) = import_ca(&store, "scep-ca-pw-parse");
+    let password = "enroll-challenge-pw-001";
+    let csr = b"mock-csr-der-for-password-envelope";
+    let (pkio_der, expected_plain, expected_wrapper) =
+        generate_scep_pkio_password(password, csr).expect("password PKIO fixture");
+    let access = store.access_key(&ca_id).expect("access");
+    let (plain, wrapper) = crypto_scep::parse_request(&pkio_der, access, Some(password))
+        .expect("parse password PKIO");
+    assert_eq!(plain, expected_plain);
+    assert_eq!(wrapper, expected_wrapper);
+}
+
+#[test]
+fn scep_build_success_certrep_password_envelope() {
+    init_scep_test_openssl();
+    let store = KeyStore::new();
+    let (ca_id, _) = import_ca(&store, "scep-ca-pw-certrep");
+    let password = "enroll-challenge-pw-002";
+    let (_issued_pem, issued_der) = generate_rsa2048_der_cert().expect("issued");
+    let certrep = build_success_certrep_with_cipher(
+        &store,
+        &ca_id,
+        "tx-pw-certrep",
+        &[0x11, 0x22, 0x33, 0x44],
+        &issued_der,
+        &[],
+        ENVELOPE_AES128_CBC,
+        Some(password),
+    );
+    assert!(!certrep.is_empty());
+    let outer = openssl::pkcs7::Pkcs7::from_der(&certrep).expect("certrep pkcs7");
+    let enveloped_der =
+        crypto_offload_server::scep_pkio::extract_signed_content(&outer).expect("inner envelope");
+    assert!(
+        crypto_offload_server::scep_password_envelope::enveloped_uses_password_recipient(
+            &enveloped_der
+        )
+        .expect("pwri")
+    );
+    let plain = crypto_offload_server::scep_password_envelope::decrypt_envelope_password(
+        &enveloped_der,
+        password,
+    )
+    .expect("decrypt certrep");
+    assert!(!plain.is_empty());
 }

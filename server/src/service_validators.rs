@@ -2,8 +2,9 @@ use tonic::Status;
 
 use crate::pb::{
     BuildCmsRequest, BuildScepFailureCertRepRequest, BuildScepGmSuccessCertRepRequest,
-    BuildScepPendingCertRepRequest, BuildScepSuccessCertRepRequest,
+    BuildScepPendingCertRepRequest, BuildScepSuccessCertRepRequest, ParseScepRequestRequest,
 };
+use crate::scep_password_envelope;
 
 pub const MAX_SMALL_PACKET: usize = 1024 * 1024;
 const CMS_CONTENT_TYPE_UNSPECIFIED: i32 = 0;
@@ -37,6 +38,21 @@ pub fn validate_cms_build_request(req: &BuildCmsRequest) -> Result<(), Status> {
     Ok(())
 }
 
+pub fn validate_challenge_password_field(password: &str) -> Result<(), Status> {
+    if password.is_empty() {
+        return Ok(());
+    }
+    scep_password_envelope::validate_challenge_password(password)
+        .map_err(|e| Status::invalid_argument(e.to_string()))
+}
+
+pub fn validate_parse_scep_request(req: &ParseScepRequestRequest) -> Result<(), Status> {
+    ensure_small_packet("scep_der", &req.scep_der)?;
+    ensure_non_empty("ca_key_id", &req.ca_key_id)?;
+    validate_challenge_password_field(&req.challenge_password)?;
+    Ok(())
+}
+
 pub fn validate_scep_success_request(req: &BuildScepSuccessCertRepRequest) -> Result<(), Status> {
     for (field, blob) in [
         ("recipient_nonce", req.recipient_nonce.as_slice()),
@@ -49,6 +65,14 @@ pub fn validate_scep_success_request(req: &BuildScepSuccessCertRepRequest) -> Re
     ensure_non_empty("transaction_id", &req.transaction_id)?;
     if req.recipient_nonce.is_empty() {
         return Err(Status::invalid_argument("recipient_nonce is required"));
+    }
+    validate_challenge_password_field(&req.challenge_password)?;
+    let password_envelope = !req.challenge_password.is_empty();
+    if !password_envelope && req.wrapper_cert_der.is_empty() {
+        return Err(Status::invalid_argument(
+            "wrapper_cert_der is required for RSA EnvelopedData; \
+             set challenge_password for PasswordRecipientInfo",
+        ));
     }
     Ok(())
 }
@@ -78,8 +102,13 @@ pub fn validate_scep_gm_success_request(
     if req.skf_content.is_empty() {
         return Err(Status::invalid_argument("skf_content is required"));
     }
-    if req.wrapper_cert_der.is_empty() {
-        return Err(Status::invalid_argument("wrapper_cert_der is required"));
+    validate_challenge_password_field(&req.challenge_password)?;
+    let password_envelope = !req.challenge_password.is_empty();
+    if !password_envelope && req.wrapper_cert_der.is_empty() {
+        return Err(Status::invalid_argument(
+            "wrapper_cert_der is required for RSA EnvelopedData; \
+             set challenge_password for PasswordRecipientInfo",
+        ));
     }
     Ok(())
 }

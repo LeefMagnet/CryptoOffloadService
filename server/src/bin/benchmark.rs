@@ -735,6 +735,7 @@ async fn run_one(channel: &Channel, mode: BenchMode, keys: &BenchKeys) -> Result
                 .parse_request(ParseScepRequestRequest {
                     scep_der: keys.scep_pkio_der.clone(),
                     ca_key_id: keys.ca_key_id.clone(),
+                    challenge_password: String::new(),
                 })
                 .await?;
         }
@@ -753,6 +754,7 @@ async fn run_one(channel: &Channel, mode: BenchMode, keys: &BenchKeys) -> Result
                 .parse_request(ParseScepRequestRequest {
                     scep_der: keys.scep_pkio_der.clone(),
                     ca_key_id: keys.ca_key_id.clone(),
+                    challenge_password: String::new(),
                 })
                 .await?
                 .into_inner();

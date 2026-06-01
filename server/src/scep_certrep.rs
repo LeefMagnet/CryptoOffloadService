@@ -46,6 +46,8 @@ pub struct ScepSuccessParams<'a> {
     pub ca_cert: &'a X509Ref,
     /// `ScepEnvelopeCipher` 整型值（0–5，与 smallstep/pkcs7 ContentEncryptionAlgorithm 对齐）
     pub envelope_cipher: i32,
+    /// 非空时使用 CMS `PasswordRecipientInfo`（RFC 8894 §3.1），而非 RSA KeyTrans。
+    pub challenge_password: Option<&'a str>,
 }
 
 /// 国密 SUCCESS CertRep：内层双证 + SKF Base64；外层 EnvelopedData 算法可选。
@@ -62,6 +64,8 @@ pub struct ScepGmSuccessParams<'a> {
     pub ca_cert: &'a X509Ref,
     /// `ScepEnvelopeCipher` 整型值（0–5，与 smallstep/pkcs7 ContentEncryptionAlgorithm 对齐）
     pub envelope_cipher: i32,
+    /// 非空时使用 CMS `PasswordRecipientInfo`（RFC 8894 §3.1），而非 RSA KeyTrans。
+    pub challenge_password: Option<&'a str>,
 }
 
 /// PENDING CertRep 参数（pkiStatus=3，无 failInfo / EnvelopedData）
@@ -114,6 +118,7 @@ pub fn build_success_certrep(
         params.ca_cert,
         &degenerate_der,
         cipher,
+        params.challenge_password,
     )?;
 
     unsafe {
@@ -167,6 +172,7 @@ pub fn build_gm_success_certrep(
         params.ca_cert,
         &inner_der,
         cipher,
+        params.challenge_password,
     )?;
 
     let sign_md = ca_message_digest(ca_key);
@@ -289,7 +295,11 @@ fn encrypt_envelope_with_cipher(
     ca_cert: &X509Ref,
     plaintext: &[u8],
     cipher: Cipher,
+    challenge_password: Option<&str>,
 ) -> Result<Vec<u8>> {
+    if let Some(pw) = challenge_password.filter(|s| !s.is_empty()) {
+        return crate::scep_password_envelope::encrypt_envelope_password(plaintext, pw, cipher);
+    }
     let recipients = rsa_encrypt_recipient_stack(wrapper, ca_cert)?;
     if cipher == Cipher::aes_128_gcm() || cipher == Cipher::aes_256_gcm() {
         return crate::scep_envelope::encrypt_envelope_aes_gcm(&recipients, plaintext, cipher);

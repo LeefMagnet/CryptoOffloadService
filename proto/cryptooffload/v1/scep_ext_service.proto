@@ -93,6 +93,7 @@ message ParseScepSignedAttributesResponse {
 message ParseGetCertPkioRequest {
   bytes scep_der = 1;
   string ca_key_id = 2;
+  string challenge_password = 3;
 }
 
 message ParseGetCertPkioResponse {
@@ -107,6 +108,7 @@ message ParseGetCertPkioResponse {
 message ParseEnrollPkioRequest {
   bytes scep_der = 1;
   string ca_key_id = 2;
+  string challenge_password = 3;
 }
 
 message ParseEnrollPkioResponse {

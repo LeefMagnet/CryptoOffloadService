@@ -7,6 +7,7 @@ pub mod openssl_init;
 pub mod scep_cert_alias;
 pub mod scep_certrep;
 pub mod scep_envelope;
+pub mod scep_password_envelope;
 pub mod scep_pkio;
 pub mod scep_signed_attrs;
 mod service_errors;
@@ -255,6 +256,60 @@ pub mod test_support {
         let pkio_der = outer.to_der()?;
         let wrapper_cert_der = wrapper_cert.to_der()?;
         Ok((pkio_der, csr_der, wrapper_cert_der))
+    }
+
+    /// SCEP PKIO：内层 `PasswordRecipientInfo`（RFC 8894 §3.1），外层 ECDSA wrapper 签名。
+    /// 返回 `(pkio_der, inner_plaintext, wrapper_cert_der)`。
+    pub fn generate_scep_pkio_password(
+        password: &str,
+        plaintext: &[u8],
+    ) -> anyhow::Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+        crate::openssl_init::init();
+        use openssl::ec::{EcGroup, EcKey};
+        use openssl::nid::Nid;
+        use openssl::pkcs7::{Pkcs7, Pkcs7Flags};
+        use openssl::stack::Stack;
+        use openssl::symm::Cipher;
+
+        crate::scep_password_envelope::validate_challenge_password(password)?;
+
+        let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1)?;
+        let ec_key = EcKey::generate(&group)?;
+        let wrapper_key = PKey::from_ec_key(ec_key)?;
+        let mut name = X509NameBuilder::new()?;
+        name.append_entry_by_text("CN", "scep-pw-wrapper")?;
+        let name = name.build();
+        let mut builder = X509Builder::new()?;
+        builder.set_version(2)?;
+        builder.set_subject_name(&name)?;
+        builder.set_issuer_name(&name)?;
+        builder.set_pubkey(&wrapper_key)?;
+        let not_before = Asn1Time::days_from_now(0)?;
+        let not_after = Asn1Time::days_from_now(365)?;
+        builder.set_not_before(&not_before)?;
+        builder.set_not_after(&not_after)?;
+        builder.sign(&wrapper_key, MessageDigest::sha256())?;
+        let wrapper_cert = builder.build();
+
+        let enveloped_der = crate::scep_password_envelope::encrypt_envelope_password(
+            plaintext,
+            password,
+            Cipher::aes_128_cbc(),
+        )?;
+
+        let certs = Stack::new()?;
+        let outer = Pkcs7::sign(
+            &wrapper_cert,
+            &wrapper_key,
+            &certs,
+            &enveloped_der,
+            Pkcs7Flags::BINARY,
+        )?;
+        Ok((
+            outer.to_der()?,
+            plaintext.to_vec(),
+            wrapper_cert.to_der()?,
+        ))
     }
 
     /// GetCert 类 PKIO：内层为 CertAliasOrCn（alias），结构同 PKIO。

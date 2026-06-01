@@ -16,9 +16,11 @@ pub fn parse_signed_attributes(pkcs7_der: &[u8]) -> Result<crate::pb::ScepSigned
 pub fn parse_getcert_pkio(
     scep_der: &[u8],
     access: KeyAccess,
+    challenge_password: Option<&str>,
 ) -> Result<crate::pb::ParseGetCertPkioResponse> {
     crate::openssl_init::init();
-    let (inner, wrapper_cert_der) = scep_pkio::decrypt_pkio_envelope(scep_der, &access)?;
+    let (inner, wrapper_cert_der) =
+        scep_pkio::decrypt_pkio_envelope(scep_der, &access, challenge_password)?;
     let attrs = scep_signed_attrs::parse_from_pkcs7_der(scep_der)?;
     let (alias_type, value) = scep_cert_alias::decode_cert_alias_content(&inner)?;
     let (content_type, alias_or_cn, serial_hex) = match alias_type {
@@ -46,12 +48,14 @@ pub fn parse_getcert_pkio(
 pub fn parse_enroll_pkio(
     scep_der: &[u8],
     access: KeyAccess,
+    challenge_password: Option<&str>,
 ) -> Result<crate::pb::ParseEnrollPkioResponse> {
     crate::openssl_init::init();
     if scep_der.is_empty() {
         anyhow::bail!("scep_der must not be empty");
     }
-    let (csr_der, wrapper_cert_der) = scep_pkio::decrypt_pkio_envelope(scep_der, &access)?;
+    let (csr_der, wrapper_cert_der) =
+        scep_pkio::decrypt_pkio_envelope(scep_der, &access, challenge_password)?;
     let attrs = scep_signed_attrs::parse_from_pkcs7_der(scep_der)?;
     Ok(crate::pb::ParseEnrollPkioResponse {
         attributes: Some(parsed_to_proto(attrs)),

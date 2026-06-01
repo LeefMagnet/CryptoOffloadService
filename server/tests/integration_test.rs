@@ -486,6 +486,7 @@ async fn grpc_scep_ext_parse_getcert_pkio() {
         .parse_get_cert_pkio(ParseGetCertPkioRequest {
             scep_der: pkio_der,
             ca_key_id: ca_id,
+            challenge_password: String::new(),
         })
         .await
         .expect("parse getcert pkio")
@@ -532,6 +533,7 @@ async fn grpc_scep_ext_parse_enroll_pkio() {
         .parse_enroll_pkio(ParseEnrollPkioRequest {
             scep_der: pkio_der,
             ca_key_id: ca_id,
+            challenge_password: String::new(),
         })
         .await
         .expect("parse enroll pkio")
@@ -775,6 +777,7 @@ async fn grpc_scep_parse_request() {
         .parse_request(ParseScepRequestRequest {
             scep_der: pkio_der,
             ca_key_id: ca_id,
+            challenge_password: String::new(),
         })
         .await
         .expect("parse scep")

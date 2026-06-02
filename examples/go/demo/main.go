@@ -30,6 +30,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"log"
@@ -172,6 +173,11 @@ func main() {
 	keys, _ := cli.ListKeys(ctx)
 	fmt.Printf("[ListKeys] count=%d\n", len(keys.GetKeys()))
 
+	// --- 7. SCEP 正向用例（来自 Rust 单测语义，按环境变量启用）---
+	if err := demoScepPositiveCases(ctx, cli, keyID); err != nil {
+		log.Fatalf("SCEP positive cases: %v", err)
+	}
+
 	// SCEP 网关典型并发模式（伪代码，未在此 demo 调用）：
 	//   go func() {
 	//       parsed, _ := cli.ParseEnrollPkio(ctx, &pb.ParseEnrollPkioRequest{...})
@@ -217,6 +223,86 @@ func demoConcurrentSigns(ctx context.Context, cli *client.Client, keyID string, 
 		return err
 	}
 	fmt.Printf("[ConcurrentSign] completed %d parallel Sign RPCs\n", parallelism)
+	return nil
+}
+
+// demoScepPositiveCases 对齐 server/tests/scep_tests.rs 的正向场景：
+// 1) ParseEnrollPkio（支持 challenge_password）
+// 2) BuildScepSuccessCertRep（challenge_password 非空时走 PasswordRecipientInfo）
+//
+// 运行时通过环境变量注入样本，避免把业务证书硬编码到示例仓库：
+//   - SCEP_ENROLL_PKIO_B64        (必填，开启本演示)
+//   - SCEP_CA_KEY_ID              (可选，推荐显式指定；必须是该 PKIO 对应 CA 私钥)
+//   - SCEP_CHALLENGE_PASSWORD     (可选，PasswordRecipientInfo 时必填)
+//   - SCEP_ISSUED_CERT_DER_B64    (可选，若提供则继续演示 BuildSuccessCertRep)
+func demoScepPositiveCases(ctx context.Context, cli *client.Client, fallbackCAKeyID string) error {
+	pkioB64 := os.Getenv("SCEP_ENROLL_PKIO_B64")
+	if pkioB64 == "" {
+		fmt.Println("[SCEP] skip: set SCEP_ENROLL_PKIO_B64 to run positive Parse/Build examples")
+		return nil
+	}
+	pkioDER, err := base64.StdEncoding.DecodeString(pkioB64)
+	if err != nil {
+		return fmt.Errorf("decode SCEP_ENROLL_PKIO_B64: %w", err)
+	}
+
+	caKeyID := os.Getenv("SCEP_CA_KEY_ID")
+	if caKeyID == "" {
+		caKeyID = fallbackCAKeyID
+		fmt.Printf("[SCEP] warning: SCEP_CA_KEY_ID not set, fallback to key_id=%s (may fail if not CA key)\n", caKeyID)
+	}
+	challengePassword := os.Getenv("SCEP_CHALLENGE_PASSWORD")
+
+	parsed, err := cli.ParseEnrollPkio(ctx, &pb.ParseEnrollPkioRequest{
+		ScepDer:           pkioDER,
+		CaKeyId:           caKeyID,
+		ChallengePassword: challengePassword,
+	})
+	if err != nil {
+		return fmt.Errorf("ParseEnrollPkio: %w", err)
+	}
+	fmt.Printf("[SCEP ParseEnrollPkio] csr_len=%d wrapper_len=%d tx=%s\n",
+		len(parsed.GetCsrDer()), len(parsed.GetWrapperCertDer()), parsed.GetAttributes().GetTransactionId())
+
+	issuedB64 := os.Getenv("SCEP_ISSUED_CERT_DER_B64")
+	if issuedB64 == "" {
+		fmt.Println("[SCEP] skip BuildSuccessCertRep: set SCEP_ISSUED_CERT_DER_B64")
+		return nil
+	}
+	issuedDER, err := base64.StdEncoding.DecodeString(issuedB64)
+	if err != nil {
+		return fmt.Errorf("decode SCEP_ISSUED_CERT_DER_B64: %w", err)
+	}
+
+	attrs := parsed.GetAttributes()
+	txID := attrs.GetTransactionId()
+	if txID == "" {
+		txID = "tx-from-example-positive"
+	}
+	recipientNonce := attrs.GetSenderNonce()
+	if len(recipientNonce) == 0 {
+		recipientNonce = []byte{0x11, 0x22, 0x33, 0x44}
+	}
+
+	wrapper := parsed.GetWrapperCertDer()
+	if challengePassword != "" {
+		// PasswordRecipientInfo 模式下 wrapper_cert_der 可省略。
+		wrapper = nil
+	}
+
+	rep, err := cli.BuildScepSuccessCertRep(ctx, &pb.BuildScepSuccessCertRepRequest{
+		CaKeyId:           caKeyID,
+		TransactionId:     txID,
+		RecipientNonce:    recipientNonce,
+		IssuedCertDer:     issuedDER,
+		WrapperCertDer:    wrapper,
+		EnvelopeCipher:    pb.ScepEnvelopeCipher_SCEP_ENVELOPE_CIPHER_AES_128_CBC,
+		ChallengePassword: challengePassword,
+	})
+	if err != nil {
+		return fmt.Errorf("BuildScepSuccessCertRep: %w", err)
+	}
+	fmt.Printf("[SCEP BuildSuccessCertRep] certrep_len=%d\n", len(rep.GetCertrepDer()))
 	return nil
 }
 

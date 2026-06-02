@@ -10,8 +10,10 @@ import cryptooffload.v1.KeyLifetime;
 import cryptooffload.v1.SignAlgorithm;
 import cryptooffload.v1.SignRequest;
 import cryptooffload.v1.SignResponse;
+import cryptooffload.v1.ScepEnvelopeCipher;
 
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -83,6 +85,9 @@ public final class Demo {
 
             // --- 3. 并发 Sign 演示：模拟多请求同时 offload（需 Java 21+）---
             demoConcurrentSigns(client, keyId);
+
+            // --- 4. SCEP 正向用例（来自 Rust 单测语义，按环境变量启用）---
+            demoScepPositiveCases(client, keyId);
         }
     }
 
@@ -117,5 +122,81 @@ public final class Demo {
             }
         }
         System.out.printf("[ConcurrentSign] completed %d parallel Sign RPCs%n", parallelism);
+    }
+
+    /**
+     * 对齐 server/tests/scep_tests.rs 的正向场景：
+     * 1) ParseEnrollPkio（支持 challenge_password）
+     * 2) BuildScepSuccessCertRep（challenge_password 非空时走 PasswordRecipientInfo）
+     *
+     * <p>通过环境变量注入样本，避免在仓库中硬编码业务证书：
+     * <ul>
+     *   <li>SCEP_ENROLL_PKIO_B64（必填，开启演示）</li>
+     *   <li>SCEP_CA_KEY_ID（可选，推荐显式指定；必须是该 PKIO 对应 CA 私钥）</li>
+     *   <li>SCEP_CHALLENGE_PASSWORD（可选，PasswordRecipientInfo 时必填）</li>
+     *   <li>SCEP_ISSUED_CERT_DER_B64（可选，若提供则继续演示 BuildSuccessCertRep）</li>
+     * </ul>
+     */
+    private static void demoScepPositiveCases(CryptoOffloadClient client, String fallbackCaKeyId) throws Exception {
+        String pkioB64 = System.getenv("SCEP_ENROLL_PKIO_B64");
+        if (pkioB64 == null || pkioB64.isBlank()) {
+            System.out.println("[SCEP] skip: set SCEP_ENROLL_PKIO_B64 to run positive Parse/Build examples");
+            return;
+        }
+        byte[] pkioDer = Base64.getDecoder().decode(pkioB64);
+
+        String caKeyId = System.getenv("SCEP_CA_KEY_ID");
+        if (caKeyId == null || caKeyId.isBlank()) {
+            caKeyId = fallbackCaKeyId;
+            System.out.printf(
+                    "[SCEP] warning: SCEP_CA_KEY_ID not set, fallback to key_id=%s (may fail if not CA key)%n",
+                    caKeyId);
+        }
+        String challengePassword = System.getenv().getOrDefault("SCEP_CHALLENGE_PASSWORD", "");
+
+        var parsed = client.parseEnrollPkio(ParseEnrollPkioRequest.newBuilder()
+                .setScepDer(com.google.protobuf.ByteString.copyFrom(pkioDer))
+                .setCaKeyId(caKeyId)
+                .setChallengePassword(challengePassword)
+                .build());
+        System.out.printf("[SCEP ParseEnrollPkio] csr_len=%d wrapper_len=%d tx=%s%n",
+                parsed.getCsrDer().size(), parsed.getWrapperCertDer().size(),
+                parsed.hasAttributes() ? parsed.getAttributes().getTransactionId() : "");
+
+        String issuedB64 = System.getenv("SCEP_ISSUED_CERT_DER_B64");
+        if (issuedB64 == null || issuedB64.isBlank()) {
+            System.out.println("[SCEP] skip BuildScepSuccessCertRep: set SCEP_ISSUED_CERT_DER_B64");
+            return;
+        }
+        byte[] issuedDer = Base64.getDecoder().decode(issuedB64);
+
+        String txId = parsed.hasAttributes() ? parsed.getAttributes().getTransactionId() : "";
+        if (txId == null || txId.isBlank()) {
+            txId = "tx-from-example-positive";
+        }
+
+        byte[] recipientNonce = parsed.hasAttributes()
+                ? parsed.getAttributes().getSenderNonce().toByteArray()
+                : new byte[0];
+        if (recipientNonce.length == 0) {
+            recipientNonce = new byte[]{0x11, 0x22, 0x33, 0x44};
+        }
+
+        byte[] wrapper = parsed.getWrapperCertDer().toByteArray();
+        if (!challengePassword.isBlank()) {
+            // PasswordRecipientInfo 模式下 wrapper_cert_der 可省略。
+            wrapper = new byte[0];
+        }
+
+        var rep = client.buildScepSuccessCertRep(BuildScepSuccessCertRepRequest.newBuilder()
+                .setCaKeyId(caKeyId)
+                .setTransactionId(txId)
+                .setRecipientNonce(com.google.protobuf.ByteString.copyFrom(recipientNonce))
+                .setIssuedCertDer(com.google.protobuf.ByteString.copyFrom(issuedDer))
+                .setWrapperCertDer(com.google.protobuf.ByteString.copyFrom(wrapper))
+                .setEnvelopeCipher(ScepEnvelopeCipher.SCEP_ENVELOPE_CIPHER_AES_128_CBC)
+                .setChallengePassword(challengePassword)
+                .build());
+        System.out.printf("[SCEP BuildSuccessCertRep] certrep_len=%d%n", rep.getCertrepDer().size());
     }
 }

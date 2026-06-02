@@ -6,6 +6,7 @@
 //! ```
 
 use anyhow::{Context, Result};
+use base64::Engine as _;
 use cryptooffload_sdk::pb::v1::*;
 use cryptooffload_sdk::{Client, PoolConfig};
 use openssl::hash::MessageDigest;
@@ -100,6 +101,103 @@ async fn main() -> Result<()> {
         .await?;
     println!("[VerifyCMS] valid={}", cms_ok.valid);
 
+    // 5. SCEP 正向用例（来自 Rust 单测语义，按环境变量启用）
+    demo_scep_positive_cases(&client, &meta.key_id).await?;
+
+    Ok(())
+}
+
+/// 对齐 server/tests/scep_tests.rs 的正向场景：
+/// 1) ParseEnrollPkio（支持 challenge_password）
+/// 2) BuildScepSuccessCertRep（challenge_password 非空时走 PasswordRecipientInfo）
+///
+/// 通过环境变量注入样本，避免在仓库中硬编码业务证书：
+/// - SCEP_ENROLL_PKIO_B64（必填，开启演示）
+/// - SCEP_CA_KEY_ID（可选，推荐显式指定；必须是该 PKIO 对应 CA 私钥）
+/// - SCEP_CHALLENGE_PASSWORD（可选，PasswordRecipientInfo 时必填）
+/// - SCEP_ISSUED_CERT_DER_B64（可选，若提供则继续演示 BuildSuccessCertRep）
+async fn demo_scep_positive_cases(client: &Client, fallback_ca_key_id: &str) -> Result<()> {
+    let pkio_b64 = match std::env::var("SCEP_ENROLL_PKIO_B64") {
+        Ok(v) if !v.is_empty() => v,
+        _ => {
+            println!("[SCEP] skip: set SCEP_ENROLL_PKIO_B64 to run positive Parse/Build examples");
+            return Ok(());
+        }
+    };
+    let pkio_der = base64::engine::general_purpose::STANDARD
+        .decode(pkio_b64)
+        .context("decode SCEP_ENROLL_PKIO_B64")?;
+
+    let ca_key_id = std::env::var("SCEP_CA_KEY_ID").unwrap_or_else(|_| fallback_ca_key_id.into());
+    if std::env::var("SCEP_CA_KEY_ID").is_err() {
+        println!(
+            "[SCEP] warning: SCEP_CA_KEY_ID not set, fallback to key_id={} (may fail if not CA key)",
+            ca_key_id
+        );
+    }
+    let challenge_password = std::env::var("SCEP_CHALLENGE_PASSWORD").unwrap_or_default();
+
+    let parsed = client
+        .parse_enroll_pkio(ParseEnrollPkioRequest {
+            scep_der: pkio_der,
+            ca_key_id: ca_key_id.clone(),
+            challenge_password: challenge_password.clone(),
+        })
+        .await?;
+    let tx = parsed
+        .attributes
+        .as_ref()
+        .map(|a| a.transaction_id.clone())
+        .unwrap_or_default();
+    println!(
+        "[SCEP ParseEnrollPkio] csr_len={} wrapper_len={} tx={}",
+        parsed.csr_der.len(),
+        parsed.wrapper_cert_der.len(),
+        tx
+    );
+
+    let issued_b64 = match std::env::var("SCEP_ISSUED_CERT_DER_B64") {
+        Ok(v) if !v.is_empty() => v,
+        _ => {
+            println!("[SCEP] skip BuildScepSuccessCertRep: set SCEP_ISSUED_CERT_DER_B64");
+            return Ok(());
+        }
+    };
+    let issued_der = base64::engine::general_purpose::STANDARD
+        .decode(issued_b64)
+        .context("decode SCEP_ISSUED_CERT_DER_B64")?;
+
+    let attrs = parsed.attributes.unwrap_or_default();
+    let tx_id = if attrs.transaction_id.is_empty() {
+        "tx-from-example-positive".to_string()
+    } else {
+        attrs.transaction_id
+    };
+    let recipient_nonce = if attrs.sender_nonce.is_empty() {
+        vec![0x11, 0x22, 0x33, 0x44]
+    } else {
+        attrs.sender_nonce
+    };
+    let wrapper_cert_der = if challenge_password.is_empty() {
+        parsed.wrapper_cert_der
+    } else {
+        // PasswordRecipientInfo 模式下 wrapper_cert_der 可省略。
+        Vec::new()
+    };
+
+    let rep = client
+        .build_scep_success_cert_rep(BuildScepSuccessCertRepRequest {
+            ca_key_id: ca_key_id.clone(),
+            transaction_id: tx_id,
+            recipient_nonce,
+            sender_nonce: Vec::new(),
+            issued_cert_der: issued_der,
+            wrapper_cert_der,
+            envelope_cipher: ScepEnvelopeCipher::ScepEnvelopeCipherAes128Cbc as i32,
+            challenge_password,
+        })
+        .await?;
+    println!("[SCEP BuildSuccessCertRep] certrep_len={}", rep.certrep_der.len());
     Ok(())
 }
 

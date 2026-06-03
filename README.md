@@ -1,6 +1,6 @@
 # CryptoOffloadService
 
-通用密码运算 offload 服务：基于 **gRPC + Protobuf**，Rust/OpenSSL 执行重 CPU 密码运算，业务进程通过 **连接池 SDK** 按 `key_id` 调用。
+通用密码运算 offload 服务（当前 **v0.2.4**）：基于 **gRPC + Protobuf**，Rust/OpenSSL 执行重 CPU 密码运算，业务进程通过 **连接池 SDK** 按 `key_id` 调用。
 
 设计参考 [ScepAccelerator](../ScepAccelerator) 的 sidecar 思路，但协议完全 protobuf 化，支持多语言接入。
 
@@ -11,7 +11,10 @@
 │ Go / Python  │  ◄──── 连接池 SDK ────►  │ crypto-offload-server (Rust)│
 │ Java / Rust  │                          │  • KeyService  (KMS 式 key_id)│
 └──────────────┘                          │  • SignService (签名/验签)     │
-                                          │  • CmsService  (CMS 解析/封装)│
+                                          │  • CmsService  (CMS 解析/封装) │
+                                          │  • ScepService (SCEP PKIO/CertRep) │
+                                          │  • CmpService  (CMP 解析/验签/组包) │
+                                          │  • gRPC Health (live/ready)    │
                                           └─────────────────────────────┘
 ```
 
@@ -24,6 +27,13 @@
 | **SignService** | `Sign` / `Verify` | RSA / ECDSA / **SM2** / **Ed25519** 签名/验签 |
 | **CmsService** | `Parse` / `Build` / `Verify` | CMS/PKCS#7 解析、封装、验签 |
 | **ScepService** | `ParseRequest` / `BuildSuccessCertRep` / `BuildFailureCertRep` / `BuildPendingCertRep` | SCEP PKIO 解析与 CertRep 构建（支持 `challenge_password` / PasswordRecipientInfo，RFC 8894 §3.1） |
+| **CmpService** | `ParsePkiMessage` / `VerifyPkiMessageProtection` / `ParseAndVerifyPkiMessage` / `BuildProtectedPkiMessage` | CMP PKIMessage 解析、protection 验签、组包（RFC 9810/9811；需 **OpenSSL 3.x** CMP API，见 [docs/API.md](docs/API.md)） |
+
+### 运行时与稳定性（v0.2.4+）
+
+- **gRPC Health**：`cryptooffload.v1.probe.live`（存活）、`cryptooffload.v1.probe.ready`（就绪，含 CMP 能力探测）
+- **并发保护**：`--crypto-max-inflight` / `--crypto-overload-watermark`（默认 ≈ 可见 CPU 核数），超限返回 `RESOURCE_EXHAUSTED` 或排队超时
+- **Sidecar 推荐**：`MaxOpen`（连接池）与 **服务端 cpuset 核数 1:1**，详见 [docs/BENCHMARK_AND_TUNING.md §1.1.1](docs/BENCHMARK_AND_TUNING.md#111-推荐-clients-与核数对齐11-非-2)
 
 ### 密钥管理（类 KMS）
 
@@ -48,6 +58,8 @@
 | [docs/API.md](docs/API.md) | **Protobuf API 完整参考**（字段、枚举、流程图、示例） |
 | [docs/BENCHMARK_AND_TUNING.md](docs/BENCHMARK_AND_TUNING.md) | **压测与容器资源配置指南** |
 | [docs/STABILITY.md](docs/STABILITY.md) | **服务端稳定性加固与可选优化** |
+| [docs/TESTING.md](docs/TESTING.md) | 单元/集成测试说明 |
+| [docs/RELEASE_NOTES_0.2.4.md](docs/RELEASE_NOTES_0.2.4.md) | v0.2.4 变更说明（CMP offload） |
 
 ## 各语言 Demo
 
@@ -61,8 +73,18 @@
 ## 压测
 
 ```bash
-# Rust 压测客户端（推荐）
+# 单模式（CLIENTS 建议 = 服务端 CPU 核数）
 ./scripts/benchmark/run_benchmark.sh
+
+# 全模式套件
+bash scripts/benchmark/run_suite.sh
+
+# 3 核服务端（taskset 0-2，clients 默认 3）
+bash scripts/benchmark/run_cmp_suite_3cpu.sh
+
+# CMP 专项（需 OpenSSL 3.x CMP 符号，WSL 可先 source）
+source scripts/benchmark/env_openssl.sh 35   # 指向 /opt/openssl35x 等
+bash scripts/benchmark/run_cmp_suite.sh
 
 # 或
 make benchmark
@@ -121,6 +143,18 @@ Rust 服务端/客户端在 `cargo build` 时通过 `tonic-build` 自动生成�
 cargo run -p crypto-offload-server -- --listen 127.0.0.1:50051
 ```
 
+**Sidecar / 绑核示例**（3 核，并发与核数对齐）：
+
+```bash
+taskset -c 0-2 ./target/release/crypto-offload-server \
+  --listen 0.0.0.0:50051 \
+  --worker-threads 3 \
+  --crypto-max-inflight 3 \
+  --crypto-overload-watermark 3
+```
+
+WSL 使用自编译 OpenSSL（如 `/opt/openssl35x`）时，构建与运行前执行 `source scripts/benchmark/env_openssl.sh 35`（会设置 `OPENSSL_DIR`、`LD_LIBRARY_PATH`）。
+
 或 Docker：
 
 ```bash
@@ -135,7 +169,7 @@ cli, err := client.New(ctx, client.Config{
     Config: pool.Config{
         Address:        "127.0.0.1:50051",
         MinIdle:        2,
-        MaxOpen:        8,
+        MaxOpen:        4,   // 建议 ≈ CryptoOffload 可见 CPU 核数（1:1）
         MaxLifetime:    30 * time.Minute,
         IdleTimeout:    5 * time.Minute,
     },
@@ -202,7 +236,7 @@ let imported = client.import_key(ImportKeyRequest {
 | 参数 | 含义 |
 |------|------|
 | `MinIdle` | 最小空闲连接，启动时预热 |
-| `MaxOpen` | 最大并发连接（含使用中 + 空闲） |
+| `MaxOpen` | 最大并发连接（含使用中 + 空闲）；**生产建议 = 服务端 CPU 核数**（与 `--crypto-max-inflight` 同量级） |
 | `MaxLifetime` | 连接最大存活时间，归还时淘汰 |
 | `IdleTimeout` | 空闲超时回收 |
 | `AcquireTimeout` | 池耗尽时等待上限 |
@@ -230,6 +264,7 @@ deploy/                 # Docker / Compose
 - `cryptooffload/v1/cms_service.proto` — CMS 操作
 - `cryptooffload/v1/scep_service.proto` — SCEP PKIO / CertRep
 - `cryptooffload/v1/scep_ext_service.proto` — SCEP 自定义扩展（SignedAttributes / CertAliasOrCn / HTTP）
+- `cryptooffload/v1/cmp_service.proto` — CMP PKIMessage offload
 
 ## 与 ScepAccelerator 的关系
 
@@ -242,6 +277,8 @@ ScepAccelerator 使用自定义 UDS 二进制帧 + SCEP 专用 opcode。本项�
 ## 构建要求
 
 - Rust 1.75+（推荐 1.83）
-- OpenSSL 3.x（含 legacy provider，CMS 3DES 解密需要）
+- OpenSSL **3.x**（含 **legacy provider**，CMS 3DES 解密需要；**CmpService** 需 3.x CMP 符号 `OSSL_CMP_*`）
 - buf（生成 Go/Python stub）
 - Go 1.22+ / Python 3.10+ / JDK 17+（按 SDK 选用）
+
+CMP 压测/集成测试在仅系统 OpenSSL 2.x 或缺少 CMP 符号的环境会返回 `FAILED_PRECONDITION`；可链接自编译 OpenSSL 3.0/3.5（见 `scripts/benchmark/env_openssl.sh`）。

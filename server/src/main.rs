@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use anyhow::Context;
 use clap::Parser;
 use crypto_offload_server::{default_crypto_max_inflight, run_server_with_config, ServerConfig};
+use std::time::Duration;
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -17,6 +18,15 @@ struct Args {
     /// 同时进行 OpenSSL 运算的最大 in-flight 数；0 = 可见 CPU 核数。
     #[arg(long, default_value_t = 0)]
     crypto_max_inflight: usize,
+    /// 过载水位（in-flight）；达到后直接拒绝新任务（RESOURCE_EXHAUSTED）。0 = 等于 crypto_max_inflight。
+    #[arg(long, default_value_t = 0)]
+    crypto_overload_watermark: usize,
+    /// 获取并发许可超时（毫秒）。
+    #[arg(long, default_value_t = 200)]
+    crypto_acquire_timeout_ms: u64,
+    /// 单个密码任务最大执行时长（毫秒）。
+    #[arg(long, default_value_t = 30000)]
+    crypto_run_timeout_ms: u64,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -54,10 +64,24 @@ fn main() -> anyhow::Result<()> {
         );
     }
     tracing::info!(crypto_max_inflight, "crypto concurrency limit");
+    tracing::info!(
+        crypto_overload_watermark = args.crypto_overload_watermark,
+        crypto_acquire_timeout_ms = args.crypto_acquire_timeout_ms,
+        crypto_run_timeout_ms = args.crypto_run_timeout_ms,
+        "crypto protection settings"
+    );
 
     let addr: SocketAddr = args.listen.parse()?;
+    let overload_watermark = if args.crypto_overload_watermark > 0 {
+        args.crypto_overload_watermark
+    } else {
+        crypto_max_inflight
+    };
     runtime.block_on(run_server_with_config(ServerConfig {
         listen: addr,
         crypto_max_inflight,
+        crypto_overload_watermark: overload_watermark,
+        crypto_acquire_timeout: Duration::from_millis(args.crypto_acquire_timeout_ms),
+        crypto_run_timeout: Duration::from_millis(args.crypto_run_timeout_ms),
     }))
 }

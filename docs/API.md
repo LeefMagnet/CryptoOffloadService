@@ -355,6 +355,19 @@ sequenceDiagram
 
 > 推荐实践：在网关/服务层增加 `cmp.offload.prefer=true` 开关，默认优先 Offload；当出现连续失败可自动降级到 BC。
 
+#### 1.6.4 工程化探针与过载保护（v0.2.4）
+
+- gRPC Health（`grpc.health.v1.Health`）新增两类服务名：
+  - `cryptooffload.v1.probe.live`：进程存活探针（始终 `SERVING`）。
+  - `cryptooffload.v1.probe.ready`：就绪探针（受 OpenSSL/CMP 能力探测影响）。
+- 启动时执行 CMP 能力探测；若环境缺少 OpenSSL 3.x CMP 符号：
+  - `cryptooffload.v1.probe.ready = NOT_SERVING`
+  - `cryptooffload.v1.CmpService = NOT_SERVING`
+- `run_crypto` 增加防雪崩保护：
+  - 并发水位保护（超水位直接 `RESOURCE_EXHAUSTED`）
+  - 排队超时保护（信号量获取超时）
+  - 执行超时保护（长耗时任务返回 `DEADLINE_EXCEEDED`）
+
 ### 1.7 密钥存储模型（重要）
 
 **ImportKey 时服务端会一次性完成解析并缓存在内存中**，后续 Sign/Verify/CMS 只通过 `key_id` 取用已解析的 OpenSSL 对象：

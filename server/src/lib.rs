@@ -28,12 +28,14 @@ pub mod pb {
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use services::{
     AppState, CmpServiceImpl, CmsServiceImpl, KeyServiceImpl, ScepExtServiceImpl, ScepServiceImpl,
     SignServiceImpl,
 };
 use tonic::transport::Server;
+use tonic_health::ServingStatus;
 
 use crate::cryptooffload::v1::cmp_service_server::CmpServiceServer;
 use crate::cryptooffload::v1::cms_service_server::CmsServiceServer;
@@ -48,6 +50,12 @@ pub struct ServerConfig {
     pub listen: SocketAddr,
     /// 同时进行 OpenSSL 运算的最大 in-flight 任务数；0 表示按可见 CPU 核数。
     pub crypto_max_inflight: usize,
+    /// 过载水位（按 in-flight）；达到该值直接拒绝新任务（RESOURCE_EXHAUSTED）。
+    pub crypto_overload_watermark: usize,
+    /// 获取并发许可的超时时间。
+    pub crypto_acquire_timeout: Duration,
+    /// 单个密码任务最大执行时间。
+    pub crypto_run_timeout: Duration,
 }
 
 impl ServerConfig {
@@ -55,6 +63,9 @@ impl ServerConfig {
         Self {
             listen,
             crypto_max_inflight: default_crypto_max_inflight(),
+            crypto_overload_watermark: default_crypto_max_inflight(),
+            crypto_acquire_timeout: Duration::from_millis(200),
+            crypto_run_timeout: Duration::from_secs(30),
         }
     }
 }
@@ -79,13 +90,51 @@ pub async fn run_server_with_config(config: ServerConfig) -> anyhow::Result<()> 
     } else {
         default_crypto_max_inflight()
     };
+    let overload_watermark = if config.crypto_overload_watermark > 0 {
+        config.crypto_overload_watermark.min(crypto_max_inflight)
+    } else {
+        crypto_max_inflight
+    };
     tracing::info!(
         listen = %config.listen,
         crypto_max_inflight,
+        crypto_overload_watermark = overload_watermark,
+        crypto_acquire_timeout_ms = config.crypto_acquire_timeout.as_millis(),
+        crypto_run_timeout_ms = config.crypto_run_timeout.as_millis(),
         "crypto-offload-server starting"
     );
 
-    let state = Arc::new(AppState::new(crypto_max_inflight));
+    let state = Arc::new(AppState::new(
+        crypto_max_inflight,
+        overload_watermark,
+        config.crypto_acquire_timeout,
+        config.crypto_run_timeout,
+    ));
+    if state.cmp_ready() {
+        tracing::info!("cmp capability probe: supported");
+    } else {
+        tracing::warn!(reason = %state.cmp_reason(), "cmp capability probe: unsupported");
+    }
+
+    let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+    health_reporter
+        .set_service_status("cryptooffload.v1.probe.live", ServingStatus::Serving)
+        .await;
+    if state.cmp_ready() {
+        health_reporter
+            .set_service_status("cryptooffload.v1.probe.ready", ServingStatus::Serving)
+            .await;
+        health_reporter
+            .set_service_status("cryptooffload.v1.CmpService", ServingStatus::Serving)
+            .await;
+    } else {
+        health_reporter
+            .set_service_status("cryptooffload.v1.probe.ready", ServingStatus::NotServing)
+            .await;
+        health_reporter
+            .set_service_status("cryptooffload.v1.CmpService", ServingStatus::NotServing)
+            .await;
+    }
 
     let key_svc = KeyServiceImpl::new(state.clone());
     let sign_svc = SignServiceImpl::new(state.clone());
@@ -95,6 +144,7 @@ pub async fn run_server_with_config(config: ServerConfig) -> anyhow::Result<()> 
     let scep_ext_svc = ScepExtServiceImpl::new(state);
 
     Server::builder()
+        .add_service(health_service)
         .add_service(KeyServiceServer::new(key_svc))
         .add_service(SignServiceServer::new(sign_svc))
         .add_service(CmsServiceServer::new(cms_svc))

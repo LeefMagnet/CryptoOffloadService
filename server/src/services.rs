@@ -1,6 +1,10 @@
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::Semaphore;
+use tokio::time::timeout;
 use tonic::{Request, Response, Status};
 
 use crate::crypto_cmp;
@@ -49,28 +53,87 @@ fn normalize_scep_envelope_cipher(requested: i32) -> Result<i32, Status> {
     Ok(requested)
 }
 
-fn ensure_cmp_available() -> Result<(), Status> {
-    crate::crypto_cmp::ensure_cmp_supported().map_err(|e| {
-        Status::failed_precondition(format!(
-            "CMP_OPENSSL_UNSUPPORTED: {}. Please fallback to Java BC or external CMP backend.",
-            e
-        ))
-    })
-}
-
 pub struct AppState {
     pub keys: KeyStore,
     crypto_semaphore: Arc<Semaphore>,
+    crypto_max_inflight: usize,
+    crypto_overload_watermark: usize,
+    crypto_acquire_timeout: Duration,
+    crypto_run_timeout: Duration,
+    crypto_inflight: AtomicUsize,
+    cmp_supported: bool,
+    cmp_reason: String,
+    failure_metrics: std::sync::Mutex<HashMap<String, u64>>,
 }
 
 impl AppState {
-    pub fn new(crypto_max_inflight: usize) -> Self {
+    pub fn new(
+        crypto_max_inflight: usize,
+        crypto_overload_watermark: usize,
+        crypto_acquire_timeout: Duration,
+        crypto_run_timeout: Duration,
+    ) -> Self {
         let n = crypto_max_inflight.max(1);
+        let watermark = crypto_overload_watermark.clamp(1, n);
+        let cmp_probe = crate::crypto_cmp::ensure_cmp_supported();
+        let (cmp_supported, cmp_reason) = match cmp_probe {
+            Ok(_) => (true, String::new()),
+            Err(e) => (false, e.to_string()),
+        };
         Self {
             keys: KeyStore::new(),
             crypto_semaphore: Arc::new(Semaphore::new(n)),
+            crypto_max_inflight: n,
+            crypto_overload_watermark: watermark,
+            crypto_acquire_timeout,
+            crypto_run_timeout,
+            crypto_inflight: AtomicUsize::new(0),
+            cmp_supported,
+            cmp_reason,
+            failure_metrics: std::sync::Mutex::new(HashMap::new()),
         }
     }
+
+    pub fn cmp_ready(&self) -> bool {
+        self.cmp_supported
+    }
+
+    pub fn cmp_reason(&self) -> &str {
+        &self.cmp_reason
+    }
+
+    pub fn record_failure(&self, family: &str, method: &str, status: &Status) {
+        let key = format!("{family}.{method}.{}", status.code() as i32);
+        if let Ok(mut m) = self.failure_metrics.lock() {
+            *m.entry(key).or_insert(0) += 1;
+        }
+    }
+}
+
+fn ensure_cmp_available(state: &Arc<AppState>) -> Result<(), Status> {
+    if state.cmp_ready() {
+        return Ok(());
+    }
+    Err(Status::failed_precondition(format!(
+        "CMP_OPENSSL_UNSUPPORTED: {}. Please fallback to Java BC or external CMP backend.",
+        state.cmp_reason()
+    )))
+}
+
+async fn with_failure_metrics<T, F>(
+    state: Arc<AppState>,
+    family: &'static str,
+    method: &'static str,
+    fut: F,
+) -> Result<Response<T>, Status>
+where
+    F: std::future::Future<Output = Result<Response<T>, Status>>,
+{
+    let result = fut.await;
+    if let Err(ref status) = result {
+        state.record_failure(family, method, status);
+    }
+    result
 }
 
 pub struct KeyServiceImpl {
@@ -138,20 +201,44 @@ where
     T: Send + 'static,
     F: FnOnce() -> Result<T, anyhow::Error> + Send + 'static,
 {
-    let permit = state
-        .crypto_semaphore
-        .clone()
-        .acquire_owned()
-        .await
-        .map_err(|_| Status::unavailable("crypto concurrency semaphore closed"))?;
+    let inflight = state.crypto_inflight.load(Ordering::Relaxed);
+    if inflight >= state.crypto_overload_watermark {
+        return Err(Status::resource_exhausted(format!(
+            "crypto overload: inflight={inflight}, watermark={}, limit={}",
+            state.crypto_overload_watermark, state.crypto_max_inflight
+        )));
+    }
 
-    tokio::task::spawn_blocking(move || {
+    let permit = timeout(
+        state.crypto_acquire_timeout,
+        state.crypto_semaphore.clone().acquire_owned(),
+    )
+    .await
+    .map_err(|_| {
+        Status::resource_exhausted(format!(
+            "crypto queue timeout: waited>{}ms",
+            state.crypto_acquire_timeout.as_millis()
+        ))
+    })?
+    .map_err(|_| Status::unavailable("crypto concurrency semaphore closed"))?;
+
+    state.crypto_inflight.fetch_add(1, Ordering::Relaxed);
+    let join = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         f()
-    })
-    .await
-    .map_err(|e| Status::internal(format!("crypto task join error: {e}")))?
-    .map_err(map_crypto_err)
+    });
+    let result = timeout(state.crypto_run_timeout, join).await;
+    state.crypto_inflight.fetch_sub(1, Ordering::Relaxed);
+
+    match result {
+        Err(_) => Err(Status::deadline_exceeded(format!(
+            "crypto task timeout: >{}ms",
+            state.crypto_run_timeout.as_millis()
+        ))),
+        Ok(joined) => joined
+            .map_err(|e| Status::internal(format!("crypto task join error: {e}")))?
+            .map_err(map_crypto_err),
+    }
 }
 
 #[tonic::async_trait]
@@ -351,144 +438,168 @@ impl CmpService for CmpServiceImpl {
         &self,
         request: Request<ParseCmpPkiMessageRequest>,
     ) -> Result<Response<ParseCmpPkiMessageResponse>, Status> {
-        ensure_cmp_available()?;
-        let req = request.into_inner();
-        validate_cmp_parse_request(&req)?;
-        let pki_message_der = req.pki_message_der;
         let state = self.state.clone();
-        let parsed = run_crypto(&state, move || {
-            crypto_cmp::parse_pki_message(&pki_message_der)
+        with_failure_metrics(state.clone(), "cmp", "parse_pki_message", async move {
+            ensure_cmp_available(&state)?;
+            let req = request.into_inner();
+            validate_cmp_parse_request(&req)?;
+            let pki_message_der = req.pki_message_der;
+            let parsed = run_crypto(&state, move || {
+                crypto_cmp::parse_pki_message(&pki_message_der)
+            })
+            .await?;
+            Ok(Response::new(ParseCmpPkiMessageResponse {
+                body_type: parsed.body_type,
+                protection_alg_oid: parsed.protection_alg_oid,
+                protection: parsed.protection,
+                protected_part_der: parsed.protected_part_der,
+                pki_header_der: parsed.pki_header_der,
+                pki_body_der: parsed.pki_body_der,
+                transaction_id: parsed.transaction_id,
+                sender_nonce: parsed.sender_nonce,
+                recipient_nonce: parsed.recipient_nonce,
+            }))
         })
-        .await?;
-        Ok(Response::new(ParseCmpPkiMessageResponse {
-            body_type: parsed.body_type,
-            protection_alg_oid: parsed.protection_alg_oid,
-            protection: parsed.protection,
-            protected_part_der: parsed.protected_part_der,
-            pki_header_der: parsed.pki_header_der,
-            pki_body_der: parsed.pki_body_der,
-            transaction_id: parsed.transaction_id,
-            sender_nonce: parsed.sender_nonce,
-            recipient_nonce: parsed.recipient_nonce,
-        }))
+        .await
     }
 
     async fn verify_pki_message_protection(
         &self,
         request: Request<VerifyCmpPkiMessageProtectionRequest>,
     ) -> Result<Response<VerifyCmpPkiMessageProtectionResponse>, Status> {
-        ensure_cmp_available()?;
-        let req = request.into_inner();
-        validate_cmp_verify_request(&req)?;
-        let access = self
-            .state
-            .keys
-            .access_key(&req.verify_key_id)
-            .map_err(map_key_store_err)?;
-        let pki_message_der = req.pki_message_der;
-        let hash_algorithm = req.hash_algorithm;
-        let sign_algorithm = req.sign_algorithm;
         let state = self.state.clone();
-        let (valid, protection_alg_oid, effective_hash, effective_sign) =
-            run_crypto(&state, move || {
-                crypto_cmp::verify_pki_message_protection(
-                    access,
-                    &pki_message_der,
-                    hash_algorithm,
-                    sign_algorithm,
-                )
-            })
-            .await?;
-        Ok(Response::new(VerifyCmpPkiMessageProtectionResponse {
-            valid,
-            protection_alg_oid,
-            hash_algorithm: effective_hash,
-            sign_algorithm: effective_sign,
-        }))
+        with_failure_metrics(
+            state.clone(),
+            "cmp",
+            "verify_pki_message_protection",
+            async move {
+                ensure_cmp_available(&state)?;
+                let req = request.into_inner();
+                validate_cmp_verify_request(&req)?;
+                let access = state
+                    .keys
+                    .access_key(&req.verify_key_id)
+                    .map_err(map_key_store_err)?;
+                let pki_message_der = req.pki_message_der;
+                let hash_algorithm = req.hash_algorithm;
+                let sign_algorithm = req.sign_algorithm;
+                let (valid, protection_alg_oid, effective_hash, effective_sign) =
+                    run_crypto(&state, move || {
+                        crypto_cmp::verify_pki_message_protection(
+                            access,
+                            &pki_message_der,
+                            hash_algorithm,
+                            sign_algorithm,
+                        )
+                    })
+                    .await?;
+                Ok(Response::new(VerifyCmpPkiMessageProtectionResponse {
+                    valid,
+                    protection_alg_oid,
+                    hash_algorithm: effective_hash,
+                    sign_algorithm: effective_sign,
+                }))
+            },
+        )
+        .await
     }
 
     async fn parse_and_verify_pki_message(
         &self,
         request: Request<ParseAndVerifyCmpPkiMessageRequest>,
     ) -> Result<Response<ParseAndVerifyCmpPkiMessageResponse>, Status> {
-        ensure_cmp_available()?;
-        let req = request.into_inner();
-        validate_cmp_parse_verify_request(&req)?;
-        let access = self
-            .state
-            .keys
-            .access_key(&req.verify_key_id)
-            .map_err(map_key_store_err)?;
-        let pki_message_der = req.pki_message_der;
-        let hash_algorithm = req.hash_algorithm;
-        let sign_algorithm = req.sign_algorithm;
         let state = self.state.clone();
-        let (parsed, valid, protection_alg_oid, effective_hash, effective_sign) =
-            run_crypto(&state, move || {
-                let parsed = crypto_cmp::parse_pki_message(&pki_message_der)?;
-                let (valid, protection_alg_oid, effective_hash, effective_sign) =
-                    crypto_cmp::verify_pki_message_protection(
-                        access,
-                        &pki_message_der,
-                        hash_algorithm,
-                        sign_algorithm,
-                    )?;
-                Ok((
-                    parsed,
+        with_failure_metrics(
+            state.clone(),
+            "cmp",
+            "parse_and_verify_pki_message",
+            async move {
+                ensure_cmp_available(&state)?;
+                let req = request.into_inner();
+                validate_cmp_parse_verify_request(&req)?;
+                let access = state
+                    .keys
+                    .access_key(&req.verify_key_id)
+                    .map_err(map_key_store_err)?;
+                let pki_message_der = req.pki_message_der;
+                let hash_algorithm = req.hash_algorithm;
+                let sign_algorithm = req.sign_algorithm;
+                let (parsed, valid, protection_alg_oid, effective_hash, effective_sign) =
+                    run_crypto(&state, move || {
+                        let parsed = crypto_cmp::parse_pki_message(&pki_message_der)?;
+                        let (valid, protection_alg_oid, effective_hash, effective_sign) =
+                            crypto_cmp::verify_pki_message_protection(
+                                access,
+                                &pki_message_der,
+                                hash_algorithm,
+                                sign_algorithm,
+                            )?;
+                        Ok((
+                            parsed,
+                            valid,
+                            protection_alg_oid,
+                            effective_hash,
+                            effective_sign,
+                        ))
+                    })
+                    .await?;
+                Ok(Response::new(ParseAndVerifyCmpPkiMessageResponse {
                     valid,
                     protection_alg_oid,
-                    effective_hash,
-                    effective_sign,
-                ))
-            })
-            .await?;
-        Ok(Response::new(ParseAndVerifyCmpPkiMessageResponse {
-            valid,
-            protection_alg_oid,
-            hash_algorithm: effective_hash,
-            sign_algorithm: effective_sign,
-            body_type: parsed.body_type,
-            pki_header_der: parsed.pki_header_der,
-            pki_body_der: parsed.pki_body_der,
-            transaction_id: parsed.transaction_id,
-            sender_nonce: parsed.sender_nonce,
-            recipient_nonce: parsed.recipient_nonce,
-        }))
+                    hash_algorithm: effective_hash,
+                    sign_algorithm: effective_sign,
+                    body_type: parsed.body_type,
+                    pki_header_der: parsed.pki_header_der,
+                    pki_body_der: parsed.pki_body_der,
+                    transaction_id: parsed.transaction_id,
+                    sender_nonce: parsed.sender_nonce,
+                    recipient_nonce: parsed.recipient_nonce,
+                }))
+            },
+        )
+        .await
     }
 
     async fn build_protected_pki_message(
         &self,
         request: Request<BuildCmpProtectedPkiMessageRequest>,
     ) -> Result<Response<BuildCmpProtectedPkiMessageResponse>, Status> {
-        ensure_cmp_available()?;
-        let req = request.into_inner();
-        validate_cmp_build_request(&req)?;
-        let access = self
-            .state
-            .keys
-            .access_key(&req.sign_key_id)
-            .map_err(map_key_store_err)?;
-        let pki_header_der = req.pki_header_der;
-        let pki_body_der = req.pki_body_der;
-        let hash_algorithm = req.hash_algorithm;
-        let sign_algorithm = req.sign_algorithm;
         let state = self.state.clone();
-        let out = run_crypto(&state, move || {
-            crypto_cmp::build_protected_pki_message(
-                access,
-                &pki_header_der,
-                &pki_body_der,
-                hash_algorithm,
-                sign_algorithm,
-            )
-        })
-        .await?;
-        Ok(Response::new(BuildCmpProtectedPkiMessageResponse {
-            pki_message_der: out.pki_message_der,
-            protection_alg_oid: out.protection_alg_oid,
-            hash_algorithm: out.hash_algorithm,
-            sign_algorithm: out.sign_algorithm,
-        }))
+        with_failure_metrics(
+            state.clone(),
+            "cmp",
+            "build_protected_pki_message",
+            async move {
+                ensure_cmp_available(&state)?;
+                let req = request.into_inner();
+                validate_cmp_build_request(&req)?;
+                let access = state
+                    .keys
+                    .access_key(&req.sign_key_id)
+                    .map_err(map_key_store_err)?;
+                let pki_header_der = req.pki_header_der;
+                let pki_body_der = req.pki_body_der;
+                let hash_algorithm = req.hash_algorithm;
+                let sign_algorithm = req.sign_algorithm;
+                let out = run_crypto(&state, move || {
+                    crypto_cmp::build_protected_pki_message(
+                        access,
+                        &pki_header_der,
+                        &pki_body_der,
+                        hash_algorithm,
+                        sign_algorithm,
+                    )
+                })
+                .await?;
+                Ok(Response::new(BuildCmpProtectedPkiMessageResponse {
+                    pki_message_der: out.pki_message_der,
+                    protection_alg_oid: out.protection_alg_oid,
+                    hash_algorithm: out.hash_algorithm,
+                    sign_algorithm: out.sign_algorithm,
+                }))
+            },
+        )
+        .await
     }
 }
 
@@ -498,162 +609,192 @@ impl ScepService for ScepServiceImpl {
         &self,
         request: Request<ParseScepRequestRequest>,
     ) -> Result<Response<ParseScepRequestResponse>, Status> {
-        let req = request.into_inner();
-        validate_parse_scep_request(&req)?;
-        let access = self
-            .state
-            .keys
-            .access_key(&req.ca_key_id)
-            .map_err(map_key_store_err)?;
-        let scep_der = req.scep_der;
-        let challenge_password = req.challenge_password;
         let state = self.state.clone();
-        let parsed = run_crypto(&state, move || {
-            let cp = optional_password_ref(&challenge_password);
-            crypto_scep::parse_request(&scep_der, access, cp)
-        })
-        .await?;
+        with_failure_metrics(state.clone(), "scep", "parse_request", async move {
+            let req = request.into_inner();
+            validate_parse_scep_request(&req)?;
+            let access = state
+                .keys
+                .access_key(&req.ca_key_id)
+                .map_err(map_key_store_err)?;
+            let scep_der = req.scep_der;
+            let challenge_password = req.challenge_password;
+            let parsed = run_crypto(&state, move || {
+                let cp = optional_password_ref(&challenge_password);
+                crypto_scep::parse_request(&scep_der, access, cp)
+            })
+            .await?;
 
-        Ok(Response::new(ParseScepRequestResponse {
-            csr_der: parsed.0,
-            wrapper_cert_der: parsed.1,
-        }))
+            Ok(Response::new(ParseScepRequestResponse {
+                csr_der: parsed.0,
+                wrapper_cert_der: parsed.1,
+            }))
+        })
+        .await
     }
 
     async fn build_success_cert_rep(
         &self,
         request: Request<BuildScepSuccessCertRepRequest>,
     ) -> Result<Response<BuildScepCertRepResponse>, Status> {
-        let req = request.into_inner();
-        validate_scep_success_request(&req)?;
-        let access = self
-            .state
-            .keys
-            .access_key(&req.ca_key_id)
-            .map_err(map_key_store_err)?;
-        let transaction_id = req.transaction_id;
-        let recipient_nonce = req.recipient_nonce;
-        let sender_nonce = req.sender_nonce;
-        let issued_cert_der = req.issued_cert_der;
-        let wrapper_cert_der = req.wrapper_cert_der;
-        let challenge_password = req.challenge_password;
-        let envelope_cipher = normalize_scep_envelope_cipher(req.envelope_cipher)?;
         let state = self.state.clone();
-        let certrep_der = run_crypto(&state, move || {
-            crypto_scep::build_success_certrep(
-                access,
-                &transaction_id,
-                &recipient_nonce,
-                &sender_nonce,
-                &issued_cert_der,
-                &wrapper_cert_der,
-                envelope_cipher,
-                optional_password_ref(&challenge_password),
-            )
-        })
-        .await?;
+        with_failure_metrics(
+            state.clone(),
+            "scep",
+            "build_success_cert_rep",
+            async move {
+                let req = request.into_inner();
+                validate_scep_success_request(&req)?;
+                let access = state
+                    .keys
+                    .access_key(&req.ca_key_id)
+                    .map_err(map_key_store_err)?;
+                let transaction_id = req.transaction_id;
+                let recipient_nonce = req.recipient_nonce;
+                let sender_nonce = req.sender_nonce;
+                let issued_cert_der = req.issued_cert_der;
+                let wrapper_cert_der = req.wrapper_cert_der;
+                let challenge_password = req.challenge_password;
+                let envelope_cipher = normalize_scep_envelope_cipher(req.envelope_cipher)?;
+                let certrep_der = run_crypto(&state, move || {
+                    crypto_scep::build_success_certrep(
+                        access,
+                        &transaction_id,
+                        &recipient_nonce,
+                        &sender_nonce,
+                        &issued_cert_der,
+                        &wrapper_cert_der,
+                        envelope_cipher,
+                        optional_password_ref(&challenge_password),
+                    )
+                })
+                .await?;
 
-        Ok(Response::new(BuildScepCertRepResponse { certrep_der }))
+                Ok(Response::new(BuildScepCertRepResponse { certrep_der }))
+            },
+        )
+        .await
     }
 
     async fn build_gm_success_cert_rep(
         &self,
         request: Request<BuildScepGmSuccessCertRepRequest>,
     ) -> Result<Response<BuildScepCertRepResponse>, Status> {
-        let req = request.into_inner();
-        validate_scep_gm_success_request(&req)?;
-        let access = self
-            .state
-            .keys
-            .access_key(&req.ca_key_id)
-            .map_err(map_key_store_err)?;
-        let transaction_id = req.transaction_id;
-        let recipient_nonce = req.recipient_nonce;
-        let sender_nonce = req.sender_nonce;
-        let sign_cert_der = req.sign_cert_der;
-        let encryption_cert_der = req.encryption_cert_der;
-        let skf_content = req.skf_content;
-        let wrapper_cert_der = req.wrapper_cert_der;
-        let challenge_password = req.challenge_password;
-        let envelope_cipher = normalize_scep_envelope_cipher(req.envelope_cipher)?;
         let state = self.state.clone();
-        let certrep_der = run_crypto(&state, move || {
-            crypto_scep::build_gm_success_certrep(
-                access,
-                &transaction_id,
-                &recipient_nonce,
-                &sender_nonce,
-                &sign_cert_der,
-                &encryption_cert_der,
-                &skf_content,
-                &wrapper_cert_der,
-                envelope_cipher,
-                optional_password_ref(&challenge_password),
-            )
-        })
-        .await?;
+        with_failure_metrics(
+            state.clone(),
+            "scep",
+            "build_gm_success_cert_rep",
+            async move {
+                let req = request.into_inner();
+                validate_scep_gm_success_request(&req)?;
+                let access = state
+                    .keys
+                    .access_key(&req.ca_key_id)
+                    .map_err(map_key_store_err)?;
+                let transaction_id = req.transaction_id;
+                let recipient_nonce = req.recipient_nonce;
+                let sender_nonce = req.sender_nonce;
+                let sign_cert_der = req.sign_cert_der;
+                let encryption_cert_der = req.encryption_cert_der;
+                let skf_content = req.skf_content;
+                let wrapper_cert_der = req.wrapper_cert_der;
+                let challenge_password = req.challenge_password;
+                let envelope_cipher = normalize_scep_envelope_cipher(req.envelope_cipher)?;
+                let certrep_der = run_crypto(&state, move || {
+                    crypto_scep::build_gm_success_certrep(
+                        access,
+                        &transaction_id,
+                        &recipient_nonce,
+                        &sender_nonce,
+                        &sign_cert_der,
+                        &encryption_cert_der,
+                        &skf_content,
+                        &wrapper_cert_der,
+                        envelope_cipher,
+                        optional_password_ref(&challenge_password),
+                    )
+                })
+                .await?;
 
-        Ok(Response::new(BuildScepCertRepResponse { certrep_der }))
+                Ok(Response::new(BuildScepCertRepResponse { certrep_der }))
+            },
+        )
+        .await
     }
 
     async fn build_failure_cert_rep(
         &self,
         request: Request<BuildScepFailureCertRepRequest>,
     ) -> Result<Response<BuildScepCertRepResponse>, Status> {
-        let req = request.into_inner();
-        validate_scep_failure_request(&req)?;
-        let access = self
-            .state
-            .keys
-            .access_key(&req.ca_key_id)
-            .map_err(map_key_store_err)?;
-        let transaction_id = req.transaction_id;
-        let recipient_nonce = req.recipient_nonce;
-        let sender_nonce = req.sender_nonce;
-        let fail_info = req.fail_info as u8;
-        let fail_info_text = req.fail_info_text;
         let state = self.state.clone();
-        let certrep_der = run_crypto(&state, move || {
-            crypto_scep::build_failure_certrep(
-                access,
-                &transaction_id,
-                &recipient_nonce,
-                &sender_nonce,
-                fail_info,
-                &fail_info_text,
-            )
-        })
-        .await?;
+        with_failure_metrics(
+            state.clone(),
+            "scep",
+            "build_failure_cert_rep",
+            async move {
+                let req = request.into_inner();
+                validate_scep_failure_request(&req)?;
+                let access = state
+                    .keys
+                    .access_key(&req.ca_key_id)
+                    .map_err(map_key_store_err)?;
+                let transaction_id = req.transaction_id;
+                let recipient_nonce = req.recipient_nonce;
+                let sender_nonce = req.sender_nonce;
+                let fail_info = req.fail_info as u8;
+                let fail_info_text = req.fail_info_text;
+                let certrep_der = run_crypto(&state, move || {
+                    crypto_scep::build_failure_certrep(
+                        access,
+                        &transaction_id,
+                        &recipient_nonce,
+                        &sender_nonce,
+                        fail_info,
+                        &fail_info_text,
+                    )
+                })
+                .await?;
 
-        Ok(Response::new(BuildScepCertRepResponse { certrep_der }))
+                Ok(Response::new(BuildScepCertRepResponse { certrep_der }))
+            },
+        )
+        .await
     }
 
     async fn build_pending_cert_rep(
         &self,
         request: Request<BuildScepPendingCertRepRequest>,
     ) -> Result<Response<BuildScepCertRepResponse>, Status> {
-        let req = request.into_inner();
-        validate_scep_pending_request(&req)?;
-        let access = self
-            .state
-            .keys
-            .access_key(&req.ca_key_id)
-            .map_err(map_key_store_err)?;
-        let transaction_id = req.transaction_id;
-        let recipient_nonce = req.recipient_nonce;
-        let sender_nonce = req.sender_nonce;
         let state = self.state.clone();
-        let certrep_der = run_crypto(&state, move || {
-            crypto_scep::build_pending_certrep(
-                access,
-                &transaction_id,
-                &recipient_nonce,
-                &sender_nonce,
-            )
-        })
-        .await?;
+        with_failure_metrics(
+            state.clone(),
+            "scep",
+            "build_pending_cert_rep",
+            async move {
+                let req = request.into_inner();
+                validate_scep_pending_request(&req)?;
+                let access = state
+                    .keys
+                    .access_key(&req.ca_key_id)
+                    .map_err(map_key_store_err)?;
+                let transaction_id = req.transaction_id;
+                let recipient_nonce = req.recipient_nonce;
+                let sender_nonce = req.sender_nonce;
+                let certrep_der = run_crypto(&state, move || {
+                    crypto_scep::build_pending_certrep(
+                        access,
+                        &transaction_id,
+                        &recipient_nonce,
+                        &sender_nonce,
+                    )
+                })
+                .await?;
 
-        Ok(Response::new(BuildScepCertRepResponse { certrep_der }))
+                Ok(Response::new(BuildScepCertRepResponse { certrep_der }))
+            },
+        )
+        .await
     }
 }
 
@@ -663,69 +804,81 @@ impl ScepExtService for ScepExtServiceImpl {
         &self,
         request: Request<ParseScepSignedAttributesRequest>,
     ) -> Result<Response<ParseScepSignedAttributesResponse>, Status> {
-        let req = request.into_inner();
-        ensure_small_packet("pkcs7_der", &req.pkcs7_der)?;
-        let pkcs7_der = req.pkcs7_der;
         let state = self.state.clone();
-        let attributes = run_crypto(&state, move || {
-            crypto_scep_ext::parse_signed_attributes(&pkcs7_der)
-        })
-        .await?;
-        Ok(Response::new(ParseScepSignedAttributesResponse {
-            attributes: Some(attributes),
-        }))
+        with_failure_metrics(
+            state.clone(),
+            "scep",
+            "parse_signed_attributes",
+            async move {
+                let req = request.into_inner();
+                ensure_small_packet("pkcs7_der", &req.pkcs7_der)?;
+                let pkcs7_der = req.pkcs7_der;
+                let attributes = run_crypto(&state, move || {
+                    crypto_scep_ext::parse_signed_attributes(&pkcs7_der)
+                })
+                .await?;
+                Ok(Response::new(ParseScepSignedAttributesResponse {
+                    attributes: Some(attributes),
+                }))
+            },
+        )
+        .await
     }
 
     async fn parse_get_cert_pkio(
         &self,
         request: Request<ParseGetCertPkioRequest>,
     ) -> Result<Response<ParseGetCertPkioResponse>, Status> {
-        let req = request.into_inner();
-        ensure_small_packet("scep_der", &req.scep_der)?;
-        validate_challenge_password_field(&req.challenge_password)?;
-        let access = self
-            .state
-            .keys
-            .access_key(&req.ca_key_id)
-            .map_err(map_key_store_err)?;
-        let scep_der = req.scep_der;
-        let challenge_password = req.challenge_password;
         let state = self.state.clone();
-        let resp = run_crypto(&state, move || {
-            crypto_scep_ext::parse_getcert_pkio(
-                &scep_der,
-                access,
-                optional_password_ref(&challenge_password),
-            )
+        with_failure_metrics(state.clone(), "scep", "parse_get_cert_pkio", async move {
+            let req = request.into_inner();
+            ensure_small_packet("scep_der", &req.scep_der)?;
+            validate_challenge_password_field(&req.challenge_password)?;
+            let access = state
+                .keys
+                .access_key(&req.ca_key_id)
+                .map_err(map_key_store_err)?;
+            let scep_der = req.scep_der;
+            let challenge_password = req.challenge_password;
+            let resp = run_crypto(&state, move || {
+                crypto_scep_ext::parse_getcert_pkio(
+                    &scep_der,
+                    access,
+                    optional_password_ref(&challenge_password),
+                )
+            })
+            .await?;
+            Ok(Response::new(resp))
         })
-        .await?;
-        Ok(Response::new(resp))
+        .await
     }
 
     async fn parse_enroll_pkio(
         &self,
         request: Request<ParseEnrollPkioRequest>,
     ) -> Result<Response<ParseEnrollPkioResponse>, Status> {
-        let req = request.into_inner();
-        ensure_small_packet("scep_der", &req.scep_der)?;
-        validate_challenge_password_field(&req.challenge_password)?;
-        let access = self
-            .state
-            .keys
-            .access_key(&req.ca_key_id)
-            .map_err(map_key_store_err)?;
-        let scep_der = req.scep_der;
-        let challenge_password = req.challenge_password;
         let state = self.state.clone();
-        let resp = run_crypto(&state, move || {
-            crypto_scep_ext::parse_enroll_pkio(
-                &scep_der,
-                access,
-                optional_password_ref(&challenge_password),
-            )
+        with_failure_metrics(state.clone(), "scep", "parse_enroll_pkio", async move {
+            let req = request.into_inner();
+            ensure_small_packet("scep_der", &req.scep_der)?;
+            validate_challenge_password_field(&req.challenge_password)?;
+            let access = state
+                .keys
+                .access_key(&req.ca_key_id)
+                .map_err(map_key_store_err)?;
+            let scep_der = req.scep_der;
+            let challenge_password = req.challenge_password;
+            let resp = run_crypto(&state, move || {
+                crypto_scep_ext::parse_enroll_pkio(
+                    &scep_der,
+                    access,
+                    optional_password_ref(&challenge_password),
+                )
+            })
+            .await?;
+            Ok(Response::new(resp))
         })
-        .await?;
-        Ok(Response::new(resp))
+        .await
     }
 
     async fn encode_cert_alias_content(
@@ -768,8 +921,11 @@ impl ScepExtService for ScepExtServiceImpl {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
     use super::{
-        normalize_scep_envelope_cipher, SCEP_ENVELOPE_CIPHER_AES_128_CBC,
+        normalize_scep_envelope_cipher, run_crypto, AppState, SCEP_ENVELOPE_CIPHER_AES_128_CBC,
         SCEP_ENVELOPE_CIPHER_DES_CBC_UNSUPPORTED, SCEP_ENVELOPE_CIPHER_UNSPECIFIED,
     };
 
@@ -810,5 +966,44 @@ mod tests {
         let err = normalize_scep_envelope_cipher(SCEP_ENVELOPE_CIPHER_DES_CBC_UNSUPPORTED)
             .expect_err("des-cbc must be rejected");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn run_crypto_rejects_when_overload_watermark_reached() {
+        let state = Arc::new(AppState::new(
+            2,
+            1,
+            Duration::from_millis(50),
+            Duration::from_millis(200),
+        ));
+        state
+            .crypto_inflight
+            .store(1, std::sync::atomic::Ordering::Relaxed);
+        let err = run_crypto(&state, move || Ok::<_, anyhow::Error>(())).await;
+        assert!(err.is_err());
+        assert_eq!(
+            err.expect_err("should reject").code(),
+            tonic::Code::ResourceExhausted
+        );
+    }
+
+    #[tokio::test]
+    async fn run_crypto_times_out_on_long_blocking_task() {
+        let state = Arc::new(AppState::new(
+            1,
+            1,
+            Duration::from_millis(50),
+            Duration::from_millis(20),
+        ));
+        let err = run_crypto(&state, move || {
+            std::thread::sleep(Duration::from_millis(100));
+            Ok::<_, anyhow::Error>(())
+        })
+        .await;
+        assert!(err.is_err());
+        assert_eq!(
+            err.expect_err("should timeout").code(),
+            tonic::Code::DeadlineExceeded
+        );
     }
 }

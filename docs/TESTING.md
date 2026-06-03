@@ -208,6 +208,13 @@ SCEP 扩展：CertAlias 编解码、SignedAttributes 提取、Enroll / GetCert P
 
 > CMP Build 路径当前采用 **C shim + OpenSSL ASN.1** 组包，重点回归 `grpc_cmp_build_succeeds_or_reports_unsupported`。
 
+### 7.5 运行时保护（v0.2.4）
+
+| 用例 | 类型 | 验证点 |
+|------|------|--------|
+| `run_crypto_rejects_when_overload_watermark_reached` | 单元 | 触发并发水位后返回 `RESOURCE_EXHAUSTED` |
+| `run_crypto_times_out_on_long_blocking_task` | 单元 | 长耗时任务超时返回 `DEADLINE_EXCEEDED` |
+
 ---
 
 ## 8. 与 Benchmark 的关系

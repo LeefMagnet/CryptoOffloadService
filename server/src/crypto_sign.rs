@@ -30,7 +30,7 @@ pub fn sign(
     };
     let private = ensure_private(&material)?;
     let sign_alg = infer_sign_algorithm(&material, sign_algorithm)?;
-    let hash_algorithm = resolve_hash_algorithm(&material, hash_algorithm, sign_alg)?;
+    let hash_algorithm = resolve_hash_algorithm(hash_algorithm, sign_alg)?;
 
     let signature = match sign_alg {
         SignAlgorithm::SignRsaPkcs1V15 => {
@@ -45,7 +45,7 @@ pub fn sign(
             let md = hash_algorithm_to_md(hash_algorithm)?;
             sign_ecdsa(private, data, md)?
         }
-        SignAlgorithm::SignSm2 => crate::crypto_sm2::sign(private, data)?,
+        SignAlgorithm::SignSm2 => crate::crypto_sm2::sm2_sign(private, data)?,
         SignAlgorithm::SignEd25519 => sign_ed25519(private, data)?,
         SignAlgorithm::Unspecified => unreachable!(),
     };
@@ -75,7 +75,7 @@ pub fn verify(
     };
     let public = ensure_public(&material)?;
     let sign_alg = infer_sign_algorithm(&material, sign_algorithm)?;
-    let hash_algorithm = resolve_hash_algorithm(&material, hash_algorithm, sign_alg)?;
+    let hash_algorithm = resolve_hash_algorithm(hash_algorithm, sign_alg)?;
 
     match sign_alg {
         SignAlgorithm::SignRsaPkcs1V15 => {
@@ -90,7 +90,7 @@ pub fn verify(
             let md = hash_algorithm_to_md(hash_algorithm)?;
             verify_ecdsa(public, data, signature, md)
         }
-        SignAlgorithm::SignSm2 => crate::crypto_sm2::verify(public, data, signature),
+        SignAlgorithm::SignSm2 => crate::crypto_sm2::sm2_verify(public, data, signature),
         SignAlgorithm::SignEd25519 => verify_ed25519(public, data, signature),
         SignAlgorithm::Unspecified => unreachable!(),
     }

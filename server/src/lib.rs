@@ -200,7 +200,7 @@ pub mod test_support {
 
     /// 生成 SM2 密钥对 + 自签证书（需 OpenSSL 支持 SM2/SM3）。
     pub fn generate_sm2_pem() -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
-        crate::crypto_sm2::generate_sm2_pem()
+        crate::crypto_sm2::generate_keypair_pem()
     }
 
     pub fn generate_ec256_pem() -> anyhow::Result<Vec<u8>> {

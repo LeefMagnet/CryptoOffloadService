@@ -218,7 +218,7 @@ pub fn build_gm_inner_signed_data(
 }
 
 fn ca_message_digest(ca_key: &PKeyRef<Private>) -> MessageDigest {
-    if crate::crypto_sm2::is_sm2_pkey_ref(ca_key) {
+    if crate::pkey_util::is_sm2(ca_key) {
         MessageDigest::sm3()
     } else {
         MessageDigest::sha256()

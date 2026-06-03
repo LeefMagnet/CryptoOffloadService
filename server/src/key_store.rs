@@ -2,7 +2,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use openssl::hash::MessageDigest;
 use openssl::pkey::{PKey, Private, Public};
 
-use crate::pkey_util::{self, PkeyFamily};
+use crate::pkey_util::{self, KeyFamily};
 use openssl::x509::X509;
 use std::collections::HashMap;
 use std::sync::{Arc, PoisonError, RwLock};
@@ -44,6 +44,24 @@ pub(crate) enum KeyMaterial {
         key: PKey<Public>,
         cert: Option<X509>,
     },
+}
+
+impl KeyMaterial {
+    fn family(&self) -> KeyFamily {
+        match self {
+            KeyMaterial::Private { key, .. } | KeyMaterial::Public { key, .. } => {
+                pkey_util::family(key)
+            }
+        }
+    }
+
+    fn algorithm_and_bits(&self) -> (String, i32) {
+        match self {
+            KeyMaterial::Private { key, .. } | KeyMaterial::Public { key, .. } => {
+                (pkey_util::algorithm_name(key), key.bits() as i32)
+            }
+        }
+    }
 }
 
 struct StoredKey {
@@ -243,21 +261,7 @@ fn parse_certificate(data: &[u8], format: i32) -> Result<X509> {
 }
 
 fn describe_key(material: &KeyMaterial) -> (String, i32) {
-    match material {
-        KeyMaterial::Private { key, .. } => {
-            (pkey_util::algorithm_label(key), key.bits() as i32)
-        }
-        KeyMaterial::Public { key, .. } => {
-            (pkey_util::algorithm_label(key), key.bits() as i32)
-        }
-    }
-}
-
-fn material_family(material: &KeyMaterial) -> PkeyFamily {
-    match material {
-        KeyMaterial::Private { key, .. } => pkey_util::pkey_family(key),
-        KeyMaterial::Public { key, .. } => pkey_util::pkey_family(key),
-    }
+    material.algorithm_and_bits()
 }
 
 pub fn hash_algorithm_to_md(hash: i32) -> Result<MessageDigest> {
@@ -272,42 +276,18 @@ pub fn hash_algorithm_to_md(hash: i32) -> Result<MessageDigest> {
 }
 
 /// SM2 签名须使用 SM3；Ed25519 不使用外部摘要；其余算法须指定 hash。
-pub fn resolve_hash_algorithm(
-    material: &KeyMaterial,
-    hash: i32,
-    sign_alg: SignAlgorithm,
-) -> Result<i32> {
-    if sign_alg == SignAlgorithm::SignEd25519 {
-        let h = HashAlgorithm::try_from(hash).unwrap_or(HashAlgorithm::Unspecified);
-        if h != HashAlgorithm::Unspecified {
-            bail!("Ed25519 does not use hash_algorithm; leave it unspecified");
-        }
-        return Ok(HashAlgorithm::Unspecified as i32);
-    }
-    if sign_alg == SignAlgorithm::SignSm2 {
-        let h = HashAlgorithm::try_from(hash).unwrap_or(HashAlgorithm::Unspecified);
-        return match h {
-            HashAlgorithm::Unspecified | HashAlgorithm::HashSm3 => {
-                Ok(HashAlgorithm::HashSm3 as i32)
-            }
-            _ => bail!("SM2 requires SM3 hash algorithm"),
-        };
-    }
-    if hash == HashAlgorithm::Unspecified as i32 {
-        bail!("hash algorithm is required");
-    }
-    let _ = material;
-    Ok(hash)
+pub fn resolve_hash_algorithm(hash: i32, sign_alg: SignAlgorithm) -> Result<i32> {
+    pkey_util::resolve_hash_for_sign(hash, sign_alg).map_err(Into::into)
 }
 
 pub fn infer_sign_algorithm(material: &KeyMaterial, requested: i32) -> Result<SignAlgorithm> {
-    let family = material_family(material);
     let req = if requested != SignAlgorithm::Unspecified as i32 {
         SignAlgorithm::try_from(requested).map_err(|_| anyhow!("invalid sign algorithm"))?
     } else {
         SignAlgorithm::Unspecified
     };
-    pkey_util::infer_sign_algorithm(family, req).map_err(Into::into)
+    pkey_util::resolve_sign_algorithm(material.family(), req)
+        .map_err(Into::into)
 }
 
 pub fn ensure_private(material: &KeyMaterial) -> Result<&PKey<Private>> {

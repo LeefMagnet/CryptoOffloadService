@@ -8,8 +8,8 @@ use crate::scep_certrep::{
     build_failure_certrep as build_failure_certrep_der,
     build_gm_success_certrep as build_gm_success_certrep_der,
     build_pending_certrep as build_pending_certrep_der,
-    build_success_certrep as build_success_certrep_der,
-    ScepFailureParams, ScepGmSuccessParams, ScepPendingParams, ScepSuccessParams,
+    build_success_certrep as build_success_certrep_der, ScepFailureParams, ScepGmSuccessParams,
+    ScepPendingParams, ScepSuccessParams,
 };
 use crate::scep_pkio;
 
@@ -48,10 +48,7 @@ pub fn build_success_certrep(
     let wrapper_owned = if wrapper_cert_der.is_empty() {
         None
     } else {
-        Some(
-            X509::from_der(wrapper_cert_der)
-                .context("invalid wrapper cert DER for response")?,
-        )
+        Some(X509::from_der(wrapper_cert_der).context("invalid wrapper cert DER for response")?)
     };
     let wrapper_ref: &X509 = match (&wrapper_owned, challenge_password.is_some()) {
         (Some(w), _) => w,
@@ -101,10 +98,7 @@ pub fn build_gm_success_certrep(
     let wrapper_owned = if wrapper_cert_der.is_empty() {
         None
     } else {
-        Some(
-            X509::from_der(wrapper_cert_der)
-                .context("invalid wrapper cert DER for GM response")?,
-        )
+        Some(X509::from_der(wrapper_cert_der).context("invalid wrapper cert DER for GM response")?)
     };
     let wrapper_ref: &X509 = match (&wrapper_owned, challenge_password.is_some()) {
         (Some(w), _) => w,

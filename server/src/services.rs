@@ -3,11 +3,13 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tonic::{Request, Response, Status};
 
+use crate::crypto_cmp;
 use crate::crypto_cms;
 use crate::crypto_scep;
 use crate::crypto_scep_ext;
 use crate::crypto_sign;
 use crate::key_store::KeyStore;
+use crate::pb::cmp_service_server::CmpService;
 use crate::pb::cms_service_server::CmsService;
 use crate::pb::key_service_server::KeyService;
 use crate::pb::scep_ext_service_server::ScepExtService;
@@ -16,9 +18,10 @@ use crate::pb::sign_service_server::SignService;
 use crate::pb::*;
 use crate::service_errors::{map_crypto_err, map_key_store_err};
 use crate::service_validators::{
-    ensure_small_packet, validate_cms_build_request, validate_challenge_password_field,
-    validate_parse_scep_request, validate_scep_failure_request, validate_scep_gm_success_request,
-    validate_scep_pending_request, validate_scep_success_request,
+    ensure_small_packet, validate_challenge_password_field, validate_cmp_build_request,
+    validate_cmp_parse_request, validate_cmp_parse_verify_request, validate_cmp_verify_request,
+    validate_cms_build_request, validate_parse_scep_request, validate_scep_failure_request,
+    validate_scep_gm_success_request, validate_scep_pending_request, validate_scep_success_request,
 };
 
 const SCEP_ENVELOPE_CIPHER_UNSPECIFIED: i32 = 0;
@@ -46,6 +49,14 @@ fn normalize_scep_envelope_cipher(requested: i32) -> Result<i32, Status> {
     Ok(requested)
 }
 
+fn ensure_cmp_available() -> Result<(), Status> {
+    crate::crypto_cmp::ensure_cmp_supported().map_err(|e| {
+        Status::failed_precondition(format!(
+            "CMP_OPENSSL_UNSUPPORTED: {}. Please fallback to Java BC or external CMP backend.",
+            e
+        ))
+    })
+}
 
 pub struct AppState {
     pub keys: KeyStore,
@@ -74,6 +85,10 @@ pub struct CmsServiceImpl {
     state: Arc<AppState>,
 }
 
+pub struct CmpServiceImpl {
+    state: Arc<AppState>,
+}
+
 pub struct ScepServiceImpl {
     state: Arc<AppState>,
 }
@@ -95,6 +110,12 @@ impl SignServiceImpl {
 }
 
 impl CmsServiceImpl {
+    pub fn new(state: Arc<AppState>) -> Self {
+        Self { state }
+    }
+}
+
+impl CmpServiceImpl {
     pub fn new(state: Arc<AppState>) -> Self {
         Self { state }
     }
@@ -192,21 +213,14 @@ impl KeyService for KeyServiceImpl {
         &self,
         _request: Request<ListKeysRequest>,
     ) -> Result<Response<ListKeysResponse>, Status> {
-        let keys = self
-            .state
-            .keys
-            .list_metadata()
-            .map_err(map_key_store_err)?;
+        let keys = self.state.keys.list_metadata().map_err(map_key_store_err)?;
         Ok(Response::new(ListKeysResponse { keys }))
     }
 }
 
 #[tonic::async_trait]
 impl SignService for SignServiceImpl {
-    async fn sign(
-        &self,
-        request: Request<SignRequest>,
-    ) -> Result<Response<SignResponse>, Status> {
+    async fn sign(&self, request: Request<SignRequest>) -> Result<Response<SignResponse>, Status> {
         let req = request.into_inner();
         ensure_small_packet("data", &req.data)?;
         let access = self
@@ -248,13 +262,7 @@ impl SignService for SignServiceImpl {
         let sign_algorithm = req.sign_algorithm;
         let state = self.state.clone();
         let valid = run_crypto(&state, move || {
-            crypto_sign::verify(
-                access,
-                &data,
-                &signature,
-                hash_algorithm,
-                sign_algorithm,
-            )
+            crypto_sign::verify(access, &data, &signature, hash_algorithm, sign_algorithm)
         })
         .await?;
 
@@ -305,9 +313,10 @@ impl CmsService for CmsServiceImpl {
         let extra = req.extra_certificates;
         let detached = req.detached;
         let state = self.state.clone();
-        let cms_der =
-            run_crypto(&state, move || crypto_cms::build_cms(&content, access, detached, &extra))
-                .await?;
+        let cms_der = run_crypto(&state, move || {
+            crypto_cms::build_cms(&content, access, detached, &extra)
+        })
+        .await?;
 
         Ok(Response::new(BuildCmsResponse { cms_der }))
     }
@@ -327,10 +336,159 @@ impl CmsService for CmsServiceImpl {
         let cms_der = req.cms_der;
         let content = req.content;
         let state = self.state.clone();
-        let valid =
-            run_crypto(&state, move || crypto_cms::verify_cms(&cms_der, access, &content)).await?;
+        let valid = run_crypto(&state, move || {
+            crypto_cms::verify_cms(&cms_der, access, &content)
+        })
+        .await?;
 
         Ok(Response::new(VerifyCmsResponse { valid }))
+    }
+}
+
+#[tonic::async_trait]
+impl CmpService for CmpServiceImpl {
+    async fn parse_pki_message(
+        &self,
+        request: Request<ParseCmpPkiMessageRequest>,
+    ) -> Result<Response<ParseCmpPkiMessageResponse>, Status> {
+        ensure_cmp_available()?;
+        let req = request.into_inner();
+        validate_cmp_parse_request(&req)?;
+        let pki_message_der = req.pki_message_der;
+        let state = self.state.clone();
+        let parsed = run_crypto(&state, move || {
+            crypto_cmp::parse_pki_message(&pki_message_der)
+        })
+        .await?;
+        Ok(Response::new(ParseCmpPkiMessageResponse {
+            body_type: parsed.body_type,
+            protection_alg_oid: parsed.protection_alg_oid,
+            protection: parsed.protection,
+            protected_part_der: parsed.protected_part_der,
+            pki_header_der: parsed.pki_header_der,
+            pki_body_der: parsed.pki_body_der,
+            transaction_id: parsed.transaction_id,
+            sender_nonce: parsed.sender_nonce,
+            recipient_nonce: parsed.recipient_nonce,
+        }))
+    }
+
+    async fn verify_pki_message_protection(
+        &self,
+        request: Request<VerifyCmpPkiMessageProtectionRequest>,
+    ) -> Result<Response<VerifyCmpPkiMessageProtectionResponse>, Status> {
+        ensure_cmp_available()?;
+        let req = request.into_inner();
+        validate_cmp_verify_request(&req)?;
+        let access = self
+            .state
+            .keys
+            .access_key(&req.verify_key_id)
+            .map_err(map_key_store_err)?;
+        let pki_message_der = req.pki_message_der;
+        let hash_algorithm = req.hash_algorithm;
+        let sign_algorithm = req.sign_algorithm;
+        let state = self.state.clone();
+        let (valid, protection_alg_oid, effective_hash, effective_sign) =
+            run_crypto(&state, move || {
+                crypto_cmp::verify_pki_message_protection(
+                    access,
+                    &pki_message_der,
+                    hash_algorithm,
+                    sign_algorithm,
+                )
+            })
+            .await?;
+        Ok(Response::new(VerifyCmpPkiMessageProtectionResponse {
+            valid,
+            protection_alg_oid,
+            hash_algorithm: effective_hash,
+            sign_algorithm: effective_sign,
+        }))
+    }
+
+    async fn parse_and_verify_pki_message(
+        &self,
+        request: Request<ParseAndVerifyCmpPkiMessageRequest>,
+    ) -> Result<Response<ParseAndVerifyCmpPkiMessageResponse>, Status> {
+        ensure_cmp_available()?;
+        let req = request.into_inner();
+        validate_cmp_parse_verify_request(&req)?;
+        let access = self
+            .state
+            .keys
+            .access_key(&req.verify_key_id)
+            .map_err(map_key_store_err)?;
+        let pki_message_der = req.pki_message_der;
+        let hash_algorithm = req.hash_algorithm;
+        let sign_algorithm = req.sign_algorithm;
+        let state = self.state.clone();
+        let (parsed, valid, protection_alg_oid, effective_hash, effective_sign) =
+            run_crypto(&state, move || {
+                let parsed = crypto_cmp::parse_pki_message(&pki_message_der)?;
+                let (valid, protection_alg_oid, effective_hash, effective_sign) =
+                    crypto_cmp::verify_pki_message_protection(
+                        access,
+                        &pki_message_der,
+                        hash_algorithm,
+                        sign_algorithm,
+                    )?;
+                Ok((
+                    parsed,
+                    valid,
+                    protection_alg_oid,
+                    effective_hash,
+                    effective_sign,
+                ))
+            })
+            .await?;
+        Ok(Response::new(ParseAndVerifyCmpPkiMessageResponse {
+            valid,
+            protection_alg_oid,
+            hash_algorithm: effective_hash,
+            sign_algorithm: effective_sign,
+            body_type: parsed.body_type,
+            pki_header_der: parsed.pki_header_der,
+            pki_body_der: parsed.pki_body_der,
+            transaction_id: parsed.transaction_id,
+            sender_nonce: parsed.sender_nonce,
+            recipient_nonce: parsed.recipient_nonce,
+        }))
+    }
+
+    async fn build_protected_pki_message(
+        &self,
+        request: Request<BuildCmpProtectedPkiMessageRequest>,
+    ) -> Result<Response<BuildCmpProtectedPkiMessageResponse>, Status> {
+        ensure_cmp_available()?;
+        let req = request.into_inner();
+        validate_cmp_build_request(&req)?;
+        let access = self
+            .state
+            .keys
+            .access_key(&req.sign_key_id)
+            .map_err(map_key_store_err)?;
+        let pki_header_der = req.pki_header_der;
+        let pki_body_der = req.pki_body_der;
+        let hash_algorithm = req.hash_algorithm;
+        let sign_algorithm = req.sign_algorithm;
+        let state = self.state.clone();
+        let out = run_crypto(&state, move || {
+            crypto_cmp::build_protected_pki_message(
+                access,
+                &pki_header_der,
+                &pki_body_der,
+                hash_algorithm,
+                sign_algorithm,
+            )
+        })
+        .await?;
+        Ok(Response::new(BuildCmpProtectedPkiMessageResponse {
+            pki_message_der: out.pki_message_der,
+            protection_alg_oid: out.protection_alg_oid,
+            hash_algorithm: out.hash_algorithm,
+            sign_algorithm: out.sign_algorithm,
+        }))
     }
 }
 
@@ -583,7 +741,9 @@ impl ScepExtService for ScepExtServiceImpl {
             crypto_scep_ext::encode_cert_alias_content(content_type, &value)
         })
         .await?;
-        Ok(Response::new(EncodeCertAliasContentResponse { content_der }))
+        Ok(Response::new(EncodeCertAliasContentResponse {
+            content_der,
+        }))
     }
 
     async fn decode_cert_alias_content(
@@ -594,16 +754,16 @@ impl ScepExtService for ScepExtServiceImpl {
         ensure_small_packet("content_der", &req.content_der)?;
         let content_der = req.content_der;
         let state = self.state.clone();
-        let (content_type, alias_or_cn, serial_number_hex) =
-            run_crypto(&state, move || crypto_scep_ext::decode_cert_alias_content(&content_der))
-                .await?;
+        let (content_type, alias_or_cn, serial_number_hex) = run_crypto(&state, move || {
+            crypto_scep_ext::decode_cert_alias_content(&content_der)
+        })
+        .await?;
         Ok(Response::new(DecodeCertAliasContentResponse {
             content_type,
             alias_or_cn,
             serial_number_hex,
         }))
     }
-
 }
 
 #[cfg(test)]
@@ -645,6 +805,7 @@ mod tests {
         validate_scep_success_request(&req).expect("password envelope without wrapper");
     }
 
+    #[test]
     fn normalize_scep_envelope_cipher_rejects_des_cbc_unsupported() {
         let err = normalize_scep_envelope_cipher(SCEP_ENVELOPE_CIPHER_DES_CBC_UNSUPPORTED)
             .expect_err("des-cbc must be rejected");

@@ -22,8 +22,7 @@ struct Args {
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
@@ -37,9 +36,7 @@ fn main() -> anyhow::Result<()> {
     if args.crypto_blocking_threads > 0 {
         builder.max_blocking_threads(args.crypto_blocking_threads);
     }
-    let runtime = builder
-        .build()
-        .context("failed to build tokio runtime")?;
+    let runtime = builder.build().context("failed to build tokio runtime")?;
 
     let crypto_max_inflight = if args.crypto_max_inflight > 0 {
         args.crypto_max_inflight

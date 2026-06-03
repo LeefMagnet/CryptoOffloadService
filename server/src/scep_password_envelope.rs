@@ -76,12 +76,7 @@ pub fn encrypt_envelope_password(
         let in_bio = mem_bio_from_bytes(plaintext).context("CMS input BIO")?;
         let flags = CMS_BINARY | CMS_PARTIAL;
 
-        let cms = ffi::CMS_encrypt(
-            ptr::null_mut(),
-            in_bio,
-            cipher.as_ptr(),
-            flags,
-        );
+        let cms = ffi::CMS_encrypt(ptr::null_mut(), in_bio, cipher.as_ptr(), flags);
         if cms.is_null() {
             ffi::BIO_free_all(in_bio);
             bail!("CMS_encrypt failed: {}", openssl_error());
@@ -101,10 +96,7 @@ pub fn encrypt_envelope_password(
             ffi::OPENSSL_free(pwri_tmp as *mut _);
             ffi::CMS_ContentInfo_free(cms);
             ffi::BIO_free_all(in_bio);
-            bail!(
-                "CMS_add0_recipient_password failed: {}",
-                openssl_error()
-            );
+            bail!("CMS_add0_recipient_password failed: {}", openssl_error());
         }
 
         if CMS_final(cms, in_bio, ptr::null_mut(), flags) != 1 {
@@ -171,10 +163,7 @@ unsafe fn decrypt_cms_password(cms: *mut ffi::CMS_ContentInfo, password: &str) -
 
     let pass = password.as_bytes();
     if CMS_decrypt_set1_password(cms, pass.as_ptr() as *mut u8, pass.len() as isize) != 1 {
-        bail!(
-            "CMS_decrypt_set1_password failed: {}",
-            openssl_error()
-        );
+        bail!("CMS_decrypt_set1_password failed: {}", openssl_error());
     }
 
     let out_bio = ffi::BIO_new(ffi::BIO_s_mem());

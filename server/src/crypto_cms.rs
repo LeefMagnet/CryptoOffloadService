@@ -68,8 +68,8 @@ pub fn build_cms(
         flags |= Pkcs7Flags::DETACHED;
     }
 
-    let pkcs7 = Pkcs7::sign(&cert, private, &certs, content, flags)
-        .context("CMS sign/build SignedData")?;
+    let pkcs7 =
+        Pkcs7::sign(&cert, private, &certs, content, flags).context("CMS sign/build SignedData")?;
     pkcs7.to_der().context("encode CMS DER")
 }
 
@@ -83,7 +83,10 @@ pub fn verify_cms(cms_der: &[u8], access: KeyAccess, content: &[u8]) -> Result<b
     };
     let verify_key_der = ensure_public(material)
         .and_then(|k| k.public_key_to_der().context("encode verify key DER"))?;
-    let verify_cert = if let KeyMaterial::Public { cert: Some(cert), .. } = material {
+    let verify_cert = if let KeyMaterial::Public {
+        cert: Some(cert), ..
+    } = material
+    {
         Some(cert.clone())
     } else {
         None
@@ -103,7 +106,11 @@ pub fn verify_cms(cms_der: &[u8], access: KeyAccess, content: &[u8]) -> Result<b
     let store = store_builder.build();
 
     let mut out = Vec::new();
-    let indata = if content.is_empty() { None } else { Some(content) };
+    let indata = if content.is_empty() {
+        None
+    } else {
+        Some(content)
+    };
     let verified = match pkcs7.verify(&certs, &store, indata, Some(&mut out), flags) {
         Ok(_) => true,
         Err(_) => false,
@@ -129,7 +136,9 @@ pub fn verify_cms(cms_der: &[u8], access: KeyAccess, content: &[u8]) -> Result<b
 
 fn pairing_cert(material: &KeyMaterial) -> Result<X509> {
     match material {
-        KeyMaterial::Private { cert: Some(cert), .. } => Ok(cert.clone()),
+        KeyMaterial::Private {
+            cert: Some(cert), ..
+        } => Ok(cert.clone()),
         KeyMaterial::Private { cert: None, .. } => {
             bail!("CMS decrypt requires certificate imported with private key")
         }

@@ -5,7 +5,7 @@ use openssl::rand::rand_bytes;
 use openssl::rsa::Padding;
 use openssl::stack::Stack;
 use openssl::symm::{Cipher, Crypter, Mode};
-use openssl::x509::{X509, X509Ref};
+use openssl::x509::{X509Ref, X509};
 
 const OID_DATA: &[u64] = &[1, 2, 840, 113549, 1, 7, 1];
 const OID_ENVELOPED_DATA: &[u64] = &[1, 2, 840, 113549, 1, 7, 3];
@@ -35,8 +35,8 @@ pub fn encrypt_envelope_aes_gcm(
 
     let mut tag = [0u8; GCM_TAG_LEN];
     let mut ciphertext = vec![0u8; plaintext.len() + cipher.block_size()];
-    let mut crypter = Crypter::new(cipher, Mode::Encrypt, &key, Some(&nonce))
-        .context("Crypter::new AES-GCM")?;
+    let mut crypter =
+        Crypter::new(cipher, Mode::Encrypt, &key, Some(&nonce)).context("Crypter::new AES-GCM")?;
     crypter.pad(false);
     let count1 = crypter
         .update(plaintext, &mut ciphertext)
@@ -44,9 +44,7 @@ pub fn encrypt_envelope_aes_gcm(
     let count2 = crypter
         .finalize(&mut ciphertext[count1..])
         .context("GCM encrypt finalize")?;
-    crypter
-        .get_tag(&mut tag)
-        .context("GCM get tag")?;
+    crypter.get_tag(&mut tag).context("GCM get tag")?;
     ciphertext.truncate(count1 + count2);
     ciphertext.extend_from_slice(&tag);
 
@@ -75,16 +73,9 @@ pub fn encrypt_envelope_aes_gcm(
     }
     let recipient_set = der_set(&recipient_infos);
 
-    let enveloped_data = der_sequence(&[
-        &der_integer(0),
-        &recipient_set,
-        &enc_content_info,
-    ]);
+    let enveloped_data = der_sequence(&[&der_integer(0), &recipient_set, &enc_content_info]);
     let content = der_explicit(0, &enveloped_data);
-    let content_info = der_sequence(&[
-        &der_oid(OID_ENVELOPED_DATA),
-        &content,
-    ]);
+    let content_info = der_sequence(&[&der_oid(OID_ENVELOPED_DATA), &content]);
     Ok(content_info)
 }
 

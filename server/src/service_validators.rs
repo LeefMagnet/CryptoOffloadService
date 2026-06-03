@@ -1,8 +1,10 @@
 use tonic::Status;
 
 use crate::pb::{
-    BuildCmsRequest, BuildScepFailureCertRepRequest, BuildScepGmSuccessCertRepRequest,
-    BuildScepPendingCertRepRequest, BuildScepSuccessCertRepRequest, ParseScepRequestRequest,
+    BuildCmpProtectedPkiMessageRequest, BuildCmsRequest, BuildScepFailureCertRepRequest,
+    BuildScepGmSuccessCertRepRequest, BuildScepPendingCertRepRequest,
+    BuildScepSuccessCertRepRequest, ParseAndVerifyCmpPkiMessageRequest, ParseCmpPkiMessageRequest,
+    ParseScepRequestRequest, VerifyCmpPkiMessageProtectionRequest,
 };
 use crate::scep_password_envelope;
 
@@ -135,6 +137,49 @@ pub fn validate_scep_pending_request(req: &BuildScepPendingCertRepRequest) -> Re
     ensure_non_empty("transaction_id", &req.transaction_id)?;
     if req.recipient_nonce.is_empty() {
         return Err(Status::invalid_argument("recipient_nonce is required"));
+    }
+    Ok(())
+}
+
+pub fn validate_cmp_parse_request(req: &ParseCmpPkiMessageRequest) -> Result<(), Status> {
+    ensure_small_packet("pki_message_der", &req.pki_message_der)?;
+    if req.pki_message_der.is_empty() {
+        return Err(Status::invalid_argument("pki_message_der is required"));
+    }
+    Ok(())
+}
+
+pub fn validate_cmp_verify_request(
+    req: &VerifyCmpPkiMessageProtectionRequest,
+) -> Result<(), Status> {
+    ensure_small_packet("pki_message_der", &req.pki_message_der)?;
+    ensure_non_empty("verify_key_id", &req.verify_key_id)?;
+    if req.pki_message_der.is_empty() {
+        return Err(Status::invalid_argument("pki_message_der is required"));
+    }
+    Ok(())
+}
+
+pub fn validate_cmp_parse_verify_request(
+    req: &ParseAndVerifyCmpPkiMessageRequest,
+) -> Result<(), Status> {
+    ensure_small_packet("pki_message_der", &req.pki_message_der)?;
+    ensure_non_empty("verify_key_id", &req.verify_key_id)?;
+    if req.pki_message_der.is_empty() {
+        return Err(Status::invalid_argument("pki_message_der is required"));
+    }
+    Ok(())
+}
+
+pub fn validate_cmp_build_request(req: &BuildCmpProtectedPkiMessageRequest) -> Result<(), Status> {
+    ensure_small_packet("pki_header_der", &req.pki_header_der)?;
+    ensure_small_packet("pki_body_der", &req.pki_body_der)?;
+    ensure_non_empty("sign_key_id", &req.sign_key_id)?;
+    if req.pki_header_der.is_empty() {
+        return Err(Status::invalid_argument("pki_header_der is required"));
+    }
+    if req.pki_body_der.is_empty() {
+        return Err(Status::invalid_argument("pki_body_der is required"));
     }
     Ok(())
 }

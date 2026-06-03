@@ -42,7 +42,11 @@ pub fn init_ext_scep_oids() {
         for (oid, sn, ln) in [
             (OID_EXTENSION_REQ, "scepExtensionReq", "SCEP extensionReq"),
             (OID_PROXY_AUTH, "scepProxyAuth", "SCEP proxyAuth"),
-            (OID_FAIL_INFO_TEXT_LEGACY, "scepFailInfoTextLegacy", "SCEP failInfoText legacy"),
+            (
+                OID_FAIL_INFO_TEXT_LEGACY,
+                "scepFailInfoTextLegacy",
+                "SCEP failInfoText legacy",
+            ),
         ] {
             register_oid(oid, sn, ln);
         }
@@ -50,7 +54,8 @@ pub fn init_ext_scep_oids() {
 }
 
 fn register_oid(oid: &str, sn: &str, ln: &str) {
-    let (Ok(c_oid), Ok(c_sn), Ok(c_ln)) = (CString::new(oid), CString::new(sn), CString::new(ln)) else {
+    let (Ok(c_oid), Ok(c_sn), Ok(c_ln)) = (CString::new(oid), CString::new(sn), CString::new(ln))
+    else {
         return;
     };
     unsafe {
@@ -104,7 +109,9 @@ pub fn parse_from_pkcs7(pkcs7: &Pkcs7) -> Result<ParsedScepAttributes> {
         }
         if let Ok(Some(v)) = read_attr_utf8_or_printable(auth_attrs, OID_FAIL_INFO_TEXT_RFC) {
             attrs.fail_info_text = v;
-        } else if let Ok(Some(v)) = read_attr_utf8_or_printable(auth_attrs, OID_FAIL_INFO_TEXT_LEGACY) {
+        } else if let Ok(Some(v)) =
+            read_attr_utf8_or_printable(auth_attrs, OID_FAIL_INFO_TEXT_LEGACY)
+        {
             attrs.fail_info_text = v;
         }
         if let Some(v) = read_attr_octet(auth_attrs, OID_SENDER_NONCE)? {

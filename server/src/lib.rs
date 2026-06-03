@@ -1,3 +1,4 @@
+pub mod crypto_cmp;
 pub mod crypto_cms;
 pub mod crypto_scep;
 pub mod crypto_scep_ext;
@@ -29,10 +30,12 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use services::{
-    AppState, CmsServiceImpl, KeyServiceImpl, ScepExtServiceImpl, ScepServiceImpl, SignServiceImpl,
+    AppState, CmpServiceImpl, CmsServiceImpl, KeyServiceImpl, ScepExtServiceImpl, ScepServiceImpl,
+    SignServiceImpl,
 };
 use tonic::transport::Server;
 
+use crate::cryptooffload::v1::cmp_service_server::CmpServiceServer;
 use crate::cryptooffload::v1::cms_service_server::CmsServiceServer;
 use crate::cryptooffload::v1::key_service_server::KeyServiceServer;
 use crate::cryptooffload::v1::scep_ext_service_server::ScepExtServiceServer;
@@ -87,6 +90,7 @@ pub async fn run_server_with_config(config: ServerConfig) -> anyhow::Result<()> 
     let key_svc = KeyServiceImpl::new(state.clone());
     let sign_svc = SignServiceImpl::new(state.clone());
     let cms_svc = CmsServiceImpl::new(state.clone());
+    let cmp_svc = CmpServiceImpl::new(state.clone());
     let scep_svc = ScepServiceImpl::new(state.clone());
     let scep_ext_svc = ScepExtServiceImpl::new(state);
 
@@ -94,6 +98,7 @@ pub async fn run_server_with_config(config: ServerConfig) -> anyhow::Result<()> 
         .add_service(KeyServiceServer::new(key_svc))
         .add_service(SignServiceServer::new(sign_svc))
         .add_service(CmsServiceServer::new(cms_svc))
+        .add_service(CmpServiceServer::new(cmp_svc))
         .add_service(ScepServiceServer::new(scep_svc))
         .add_service(ScepExtServiceServer::new(scep_ext_svc))
         .serve(config.listen)
@@ -109,7 +114,7 @@ pub mod test_support {
     use openssl::hash::MessageDigest;
     use openssl::pkey::PKey;
     use openssl::rsa::Rsa;
-    use openssl::x509::{X509, X509Builder, X509NameBuilder};
+    use openssl::x509::{X509Builder, X509NameBuilder, X509};
 
     pub fn generate_rsa2048_pem() -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
         let rsa = Rsa::generate(2048)?;
@@ -305,11 +310,7 @@ pub mod test_support {
             &enveloped_der,
             Pkcs7Flags::BINARY,
         )?;
-        Ok((
-            outer.to_der()?,
-            plaintext.to_vec(),
-            wrapper_cert.to_der()?,
-        ))
+        Ok((outer.to_der()?, plaintext.to_vec(), wrapper_cert.to_der()?))
     }
 
     /// GetCert 类 PKIO：内层为 CertAliasOrCn（alias），结构同 PKIO。

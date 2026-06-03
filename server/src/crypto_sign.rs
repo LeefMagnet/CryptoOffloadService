@@ -96,13 +96,21 @@ pub fn verify(
     }
 }
 
-fn sign_rsa_pkcs1_v15(key: &PKey<openssl::pkey::Private>, data: &[u8], md: MessageDigest) -> Result<Vec<u8>> {
+fn sign_rsa_pkcs1_v15(
+    key: &PKey<openssl::pkey::Private>,
+    data: &[u8],
+    md: MessageDigest,
+) -> Result<Vec<u8>> {
     let mut signer = Signer::new(md, key).context("create RSA PKCS#1 signer")?;
     signer.update(data).context("signer update")?;
     signer.sign_to_vec().context("RSA PKCS#1 sign")
 }
 
-fn sign_rsa_pss(key: &PKey<openssl::pkey::Private>, data: &[u8], md: MessageDigest) -> Result<Vec<u8>> {
+fn sign_rsa_pss(
+    key: &PKey<openssl::pkey::Private>,
+    data: &[u8],
+    md: MessageDigest,
+) -> Result<Vec<u8>> {
     let mut signer = Signer::new(md, key).context("create RSA-PSS signer")?;
     signer.set_rsa_padding(Padding::PKCS1_PSS)?;
     signer.set_rsa_pss_saltlen(RsaPssSaltlen::DIGEST_LENGTH)?;
@@ -110,7 +118,11 @@ fn sign_rsa_pss(key: &PKey<openssl::pkey::Private>, data: &[u8], md: MessageDige
     signer.sign_to_vec().context("RSA-PSS sign")
 }
 
-fn sign_ecdsa(key: &PKey<openssl::pkey::Private>, data: &[u8], md: MessageDigest) -> Result<Vec<u8>> {
+fn sign_ecdsa(
+    key: &PKey<openssl::pkey::Private>,
+    data: &[u8],
+    md: MessageDigest,
+) -> Result<Vec<u8>> {
     let mut signer = Signer::new(md, key).context("create ECDSA signer")?;
     signer.update(data).context("signer update")?;
     signer.sign_to_vec().context("ECDSA sign")
@@ -125,9 +137,7 @@ fn sign_sm2(key: &PKey<openssl::pkey::Private>, data: &[u8]) -> Result<Vec<u8>> 
 
 fn sign_ed25519(key: &PKey<openssl::pkey::Private>, data: &[u8]) -> Result<Vec<u8>> {
     let mut signer = Signer::new_without_digest(key).context("create Ed25519 signer")?;
-    signer
-        .sign_oneshot_to_vec(data)
-        .context("Ed25519 sign")
+    signer.sign_oneshot_to_vec(data).context("Ed25519 sign")
 }
 
 fn verify_rsa_pkcs1_v15(
@@ -165,11 +175,7 @@ fn verify_ecdsa(
     Ok(verifier.verify(signature).context("ECDSA verify")?)
 }
 
-fn verify_sm2(
-    key: &PKey<openssl::pkey::Public>,
-    data: &[u8],
-    signature: &[u8],
-) -> Result<bool> {
+fn verify_sm2(key: &PKey<openssl::pkey::Public>, data: &[u8], signature: &[u8]) -> Result<bool> {
     let md = MessageDigest::sm3();
     let mut verifier = Verifier::new(md, key).context("create SM2 verifier")?;
     verifier.update(data).context("verifier update")?;

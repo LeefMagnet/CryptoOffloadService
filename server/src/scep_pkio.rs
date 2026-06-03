@@ -40,8 +40,8 @@ pub fn decrypt_pkio_envelope(
             KeyAccess::Permanent(m) | KeyAccess::Temporary(m) => m,
         };
         let (ca_key, ca_cert) = ca_private_with_cert(material)?;
-        let inner = Pkcs7::from_der(&enveloped_der)
-            .context("inner content is not PKCS7 envelopedData")?;
+        let inner =
+            Pkcs7::from_der(&enveloped_der).context("inner content is not PKCS7 envelopedData")?;
         inner
             .decrypt(&ca_key, &ca_cert, Pkcs7Flags::empty())
             .context("failed to decrypt inner PKCS7 by CA RSA key")?

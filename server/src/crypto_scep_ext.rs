@@ -77,7 +77,11 @@ pub fn decode_cert_alias_content(content_der: &[u8]) -> Result<(i32, String, Str
             String::new(),
             v,
         )),
-        _ => Ok((scep_cert_alias::cert_alias_type_to_proto(t), v, String::new())),
+        _ => Ok((
+            scep_cert_alias::cert_alias_type_to_proto(t),
+            v,
+            String::new(),
+        )),
     }
 }
 

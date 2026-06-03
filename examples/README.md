@@ -56,4 +56,23 @@ export SCEP_ISSUED_CERT_DER_B64="<optional base64 DER>"
 - 不设置 `SCEP_ENROLL_PKIO_B64` 时会跳过 SCEP 段，仅运行基础 Sign/CMS 演示。
 - 不设置 `SCEP_ISSUED_CERT_DER_B64` 时只演示 Parse，不演示 BuildSuccessCertRep。
 
+## CMP ParseAndVerify（Go / Java / Rust 共用）
+
+三个示例都补充了 CMP 的单次 RPC 路径：
+
+1. `ParseAndVerifyCmpPkiMessage`（单次 RPC 完成 parse + verify）
+
+通过环境变量注入样本：
+
+```bash
+export CMP_PKI_MESSAGE_DER_B64="<base64 DER>"
+export CMP_VERIFY_KEY_ID="<optional verify key id>"
+```
+
+说明：
+- `CMP_PKI_MESSAGE_DER_B64` 未设置时，示例会自动跳过 CMP 段。
+- `CMP_VERIFY_KEY_ID` 未设置时，会 fallback 到示例中已导入的 key_id（仅用于演示）。
+- 若要验证真实生产报文，建议使用证书导入得到的 key_id 作为 `CMP_VERIFY_KEY_ID`。
+- SM2 验签依赖运行时 OpenSSL 的国密能力（可用时 `ParseAndVerify` 支持 SM2 证书验签）。
+
 完整 API 说明见 [docs/API.md](../docs/API.md)。

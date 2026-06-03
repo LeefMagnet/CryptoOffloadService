@@ -8,7 +8,7 @@ use openssl::hash::MessageDigest;
 use openssl::nid::Nid;
 use openssl::pkey::PKey;
 use openssl::rsa::Rsa;
-use openssl::x509::{X509, X509Builder, X509NameBuilder};
+use openssl::x509::{X509Builder, X509NameBuilder, X509};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
@@ -26,9 +26,9 @@ use cryptooffload::v1::scep_service_client::ScepServiceClient;
 use cryptooffload::v1::sign_service_client::SignServiceClient;
 use cryptooffload::v1::{
     BuildCmsRequest, BuildScepFailureCertRepRequest, BuildScepPendingCertRepRequest,
-    BuildScepSuccessCertRepRequest,
-    HashAlgorithm, ImportKeyRequest, KeyFormat, KeyKind, KeyLifetime, ParseCmsRequest,
-    ParseScepRequestRequest, SignAlgorithm, SignRequest, VerifyCmsRequest, VerifyRequest,
+    BuildScepSuccessCertRepRequest, HashAlgorithm, ImportKeyRequest, KeyFormat, KeyKind,
+    KeyLifetime, ParseCmsRequest, ParseScepRequestRequest, SignAlgorithm, SignRequest,
+    VerifyCmsRequest, VerifyRequest,
 };
 
 const ENVELOPE_UNSPECIFIED: i32 = 0;
@@ -130,7 +130,10 @@ async fn main() -> Result<()> {
     let keys = prepare_keys(&channel, &args, &payload).await?;
 
     if requires_sm2(args.mode) && keys.sm2_private_key_id.is_none() {
-        anyhow::bail!("mode {:?} requires SM2 support in OpenSSL; unavailable on this host", args.mode);
+        anyhow::bail!(
+            "mode {:?} requires SM2 support in OpenSSL; unavailable on this host",
+            args.mode
+        );
     }
 
     println!("warmup {}s ...", args.warmup_seconds);
@@ -147,7 +150,11 @@ async fn main() -> Result<()> {
     let start = Instant::now();
     let mut handles = Vec::with_capacity(args.clients);
     for i in 0..args.clients {
-        let n = if i == 0 { per_client + remainder } else { per_client };
+        let n = if i == 0 {
+            per_client + remainder
+        } else {
+            per_client
+        };
         let ch = channel.clone();
         let keys = keys.clone_for_worker();
         let latencies = latencies.clone();
@@ -218,9 +225,7 @@ fn print_env_banner(args: &Args) {
     if !args.server_profile.is_empty() {
         println!("server_profile: {}", args.server_profile);
     } else {
-        println!(
-            "server_profile: (unset — 请用 --server-profile 标注服务端 cpuset/worker 配置)"
-        );
+        println!("server_profile: (unset — 请用 --server-profile 标注服务端 cpuset/worker 配置)");
     }
     println!(
         "note: clients={} 是客户端并发连接数；QPS 受服务端可见 CPU 核数、cpuset、OpenSSL 线程竞争影响",
@@ -312,8 +317,20 @@ async fn prepare_keys(channel: &Channel, args: &Args, payload: &[u8]) -> Result<
 
     let t0 = Instant::now();
 
-    let priv_meta = import_private(&mut key_client, priv_pem.clone(), "bench-private", &[], KeyFormat::Unspecified).await?;
-    let pub_meta = import_public(&mut key_client, extract_public_pem(&priv_pem)?, "bench-public").await?;
+    let priv_meta = import_private(
+        &mut key_client,
+        priv_pem.clone(),
+        "bench-private",
+        &[],
+        KeyFormat::Unspecified,
+    )
+    .await?;
+    let pub_meta = import_public(
+        &mut key_client,
+        extract_public_pem(&priv_pem)?,
+        "bench-public",
+    )
+    .await?;
     let cms_meta = import_private(
         &mut key_client,
         priv_pem,
@@ -337,12 +354,8 @@ async fn prepare_keys(channel: &Channel, args: &Args, payload: &[u8]) -> Result<
         KeyFormat::Der,
     )
     .await?;
-    let ca_cert_meta = import_certificate(
-        &mut key_client,
-        ca_cert_der.clone(),
-        "bench-scep-ca-cert",
-    )
-    .await?;
+    let ca_cert_meta =
+        import_certificate(&mut key_client, ca_cert_der.clone(), "bench-scep-ca-cert").await?;
 
     let recipient_nonce = vec![0x01, 0x02, 0x03, 0x04];
     let scep_success_req = scep_success_certrep_request(
@@ -360,34 +373,46 @@ async fn prepare_keys(channel: &Channel, args: &Args, payload: &[u8]) -> Result<
 
     // Ed25519
     let ed25519_pem = generate_ed25519_pem()?;
-    let ed25519_priv = import_private(&mut key_client, ed25519_pem.clone(), "bench-ed25519-priv", &[], KeyFormat::Unspecified).await?;
-    let ed25519_pub = import_public(&mut key_client, extract_public_pem(&ed25519_pem)?, "bench-ed25519-pub").await?;
+    let ed25519_priv = import_private(
+        &mut key_client,
+        ed25519_pem.clone(),
+        "bench-ed25519-priv",
+        &[],
+        KeyFormat::Unspecified,
+    )
+    .await?;
+    let ed25519_pub = import_public(
+        &mut key_client,
+        extract_public_pem(&ed25519_pem)?,
+        "bench-ed25519-pub",
+    )
+    .await?;
 
     // SM2（可选）
     let (sm2_private_key_id, sm2_public_key_id) = match generate_sm2_pem() {
-            Ok((sm2_pem, sm2_cert_pem)) => {
-                let sm2_cert_der = X509::from_pem(&sm2_cert_pem)?.to_der()?;
-                let sm2_priv = import_private(
-                    &mut key_client,
-                    sm2_pem.clone(),
-                    "bench-sm2-priv",
-                    &sm2_cert_der,
-                    KeyFormat::Der,
-                )
-                .await?;
-                let sm2_pub = import_public(
-                    &mut key_client,
-                    extract_public_pem(&sm2_pem)?,
-                    "bench-sm2-pub",
-                )
-                .await?;
-                (Some(sm2_priv.key_id), Some(sm2_pub.key_id))
-            }
-            Err(e) => {
-                eprintln!("WARN: SM2 key generation unavailable: {e}");
-                (None, None)
-            }
-        };
+        Ok((sm2_pem, sm2_cert_pem)) => {
+            let sm2_cert_der = X509::from_pem(&sm2_cert_pem)?.to_der()?;
+            let sm2_priv = import_private(
+                &mut key_client,
+                sm2_pem.clone(),
+                "bench-sm2-priv",
+                &sm2_cert_der,
+                KeyFormat::Der,
+            )
+            .await?;
+            let sm2_pub = import_public(
+                &mut key_client,
+                extract_public_pem(&sm2_pem)?,
+                "bench-sm2-pub",
+            )
+            .await?;
+            (Some(sm2_priv.key_id), Some(sm2_pub.key_id))
+        }
+        Err(e) => {
+            eprintln!("WARN: SM2 key generation unavailable: {e}");
+            (None, None)
+        }
+    };
 
     let cms_der = cms_client
         .build(BuildCmsRequest {

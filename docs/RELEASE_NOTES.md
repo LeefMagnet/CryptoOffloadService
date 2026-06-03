@@ -9,12 +9,19 @@
 
 | 版本 | 说明 | 详情 |
 |------|------|------|
+| `0.2.4` | CMP offload（RFC 9810/9811，OpenSSL 3.x + C shim） | [RELEASE_NOTES_0.2.4.md](./RELEASE_NOTES_0.2.4.md) |
 | `0.2.3` | SCEP challengePassword / PasswordRecipientInfo（RFC 8894 §3.1） | [RELEASE_NOTES_0.2.3.md](./RELEASE_NOTES_0.2.3.md) |
 | `0.2.2` | 架构美学重构（服务层解耦 + FFI 边界收口）与版本升级 | [RELEASE_NOTES_0.2.2.md](./RELEASE_NOTES_0.2.2.md) |
 | `0.2.1` | CMS 验签语义收紧、SCEP DER 边界加固与回归测试补全 | 见下方摘要 |
 | `0.2.0` | ScepExtService 引入，SCEP 扩展能力进入稳定分支 | 见下方摘要 |
 
 ---
+
+## 0.2.4
+
+- 主题：CMP PKIMessage 解析/验签/受保护构建卸载，协议层与密码运算分离。
+- 关键改动：新增 `CmpService`；C shim ASN.1 组包；`ParseAndVerify` 单 RPC；细粒度 shim 错误映射。
+- 详情：[RELEASE_NOTES_0.2.4.md](./RELEASE_NOTES_0.2.4.md)。
 
 ## 0.2.3
 

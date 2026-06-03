@@ -101,9 +101,53 @@ async fn main() -> Result<()> {
         .await?;
     println!("[VerifyCMS] valid={}", cms_ok.valid);
 
-    // 5. SCEP 正向用例（来自 Rust 单测语义，按环境变量启用）
+    // 5. CMP ParseAndVerify（按环境变量启用）
+    demo_cmp_parse_and_verify(&client, &meta.key_id).await?;
+
+    // 6. SCEP 正向用例（来自 Rust 单测语义，按环境变量启用）
     demo_scep_positive_cases(&client, &meta.key_id).await?;
 
+    Ok(())
+}
+
+/// CMP 单次 RPC Parse + Verify 演示。
+///
+/// 环境变量：
+/// - CMP_PKI_MESSAGE_DER_B64（必填，开启演示）
+/// - CMP_VERIFY_KEY_ID（可选，默认 fallback 到 fallback_verify_key_id）
+async fn demo_cmp_parse_and_verify(client: &Client, fallback_verify_key_id: &str) -> Result<()> {
+    let msg_b64 = match std::env::var("CMP_PKI_MESSAGE_DER_B64") {
+        Ok(v) if !v.is_empty() => v,
+        _ => {
+            println!("[CMP] skip: set CMP_PKI_MESSAGE_DER_B64 to run ParseAndVerify example");
+            return Ok(());
+        }
+    };
+    let pki_message_der = base64::engine::general_purpose::STANDARD
+        .decode(msg_b64)
+        .context("decode CMP_PKI_MESSAGE_DER_B64")?;
+    let verify_key_id =
+        std::env::var("CMP_VERIFY_KEY_ID").unwrap_or_else(|_| fallback_verify_key_id.into());
+    if std::env::var("CMP_VERIFY_KEY_ID").is_err() {
+        println!(
+            "[CMP] warning: CMP_VERIFY_KEY_ID not set, fallback to key_id={}",
+            verify_key_id
+        );
+    }
+    let resp = client
+        .parse_and_verify_cmp_pki_message(ParseAndVerifyCmpPkiMessageRequest {
+            pki_message_der,
+            verify_key_id,
+            ..Default::default()
+        })
+        .await?;
+    println!(
+        "[CMP ParseAndVerify] valid={} body_type={} tx_len={} recip_nonce_len={}",
+        resp.valid,
+        resp.body_type,
+        resp.transaction_id.len(),
+        resp.recipient_nonce.len()
+    );
     Ok(())
 }
 

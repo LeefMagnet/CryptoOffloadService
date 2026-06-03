@@ -1,7 +1,9 @@
 //! 全算法签名/验签矩阵测试。
 
-use crypto_offload_server::cryptooffload::v1::{HashAlgorithm, KeyFormat, KeyKind, KeyLifetime, SignAlgorithm};
 use crypto_offload_server::crypto_sign;
+use crypto_offload_server::cryptooffload::v1::{
+    HashAlgorithm, KeyFormat, KeyKind, KeyLifetime, SignAlgorithm,
+};
 use crypto_offload_server::key_store::KeyStore;
 use crypto_offload_server::test_support::{
     extract_public_pem, generate_ec256_pem, generate_ed25519_pem, generate_rsa2048_pem,
@@ -78,13 +80,7 @@ fn import_pair(
     }
 }
 
-fn roundtrip(
-    store: &KeyStore,
-    keys: &KeyPair,
-    data: &[u8],
-    hash: i32,
-    sign_alg: i32,
-) {
+fn roundtrip(store: &KeyStore, keys: &KeyPair, data: &[u8], hash: i32, sign_alg: i32) {
     let sig = crypto_sign::sign(
         store.access_key(&keys.priv_id).expect("priv"),
         data,
@@ -102,7 +98,10 @@ fn roundtrip(
         sign_alg,
     )
     .expect("verify");
-    assert!(valid, "verify should pass for sign_alg={sign_alg} hash={hash}");
+    assert!(
+        valid,
+        "verify should pass for sign_alg={sign_alg} hash={hash}"
+    );
 
     let mut bad = sig.clone();
     if let Some(b) = bad.last_mut() {

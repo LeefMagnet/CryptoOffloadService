@@ -18,6 +18,7 @@
 | `KeyService` | 密钥导入/删除/查询（类 KMS，返回 `key_id`） |
 | `SignService` | 数据签名与验签（通过 `key_id` 引用密钥） |
 | `CmsService` | CMS/PKCS#7 解析、封装、验签 |
+| `CmpService` | CMP（RFC 9810/9811）PKIMessage 解析、保护验签、保护签名构建 |
 | `ScepService` | SCEP PKIO 解析与 CertRep 构建（RFC 8894） |
 | `ScepExtService` | SCEP 自定义扩展：SignedAttributes、CertAliasOrCn、HTTP/MIME |
 
@@ -253,6 +254,10 @@ stateDiagram-v2
 | `CmsService.Build` | `BuildCMS` | `build_cms` | `buildCms` |
 | `CmsService.Parse` | `ParseCMS` | `parse_cms` | `parseCms` |
 | `CmsService.Verify` | `VerifyCMS` | `verify_cms` | `verifyCms` |
+| `CmpService.BuildProtectedPkiMessage` | `BuildCmpProtectedPkiMessage` | `build_cmp_protected_pki_message` | `buildCmpProtectedPkiMessage` |
+| `CmpService.ParsePkiMessage` | `ParseCmpPkiMessage` | `parse_cmp_pki_message` | `parseCmpPkiMessage` |
+| `CmpService.VerifyPkiMessageProtection` | `VerifyCmpPkiMessageProtection` | `verify_cmp_pki_message_protection` | `verifyCmpPkiMessageProtection` |
+| `CmpService.ParseAndVerifyPkiMessage` | `ParseAndVerifyCmpPkiMessage` | `parse_and_verify_cmp_pki_message` | `parseAndVerifyCmpPkiMessage` |
 | `ScepService.ParseRequest` | `ParseScepRequest` | `parse_scep_request` | `parseScepRequest` |
 | `ScepService.BuildSuccessCertRep` | `BuildScepSuccessCertRep` | `build_scep_success_cert_rep` | `buildScepSuccessCertRep` |
 | `ScepService.BuildGmSuccessCertRep` | `BuildScepGmSuccessCertRep` | `build_scep_gm_success_cert_rep` | `buildScepGmSuccessCertRep` |
@@ -276,7 +281,81 @@ stateDiagram-v2
 
 连接池：Go `client.New` / Rust `Client::connect` / Java `CryptoOffloadClient`。
 
-### 1.6 密钥存储模型（重要）
+### 1.6 CMP 接入说明（OpenSSL 3.x）
+
+当前 CMP 路径遵循“**仅 OpenSSL CMP API**”策略：
+
+- 运行环境缺少 OpenSSL 3.x CMP 符号时：返回 `FAILED_PRECONDITION`（`CMP_OPENSSL_UNSUPPORTED`）
+- `ParsePkiMessage`：可用
+- `VerifyPkiMessageProtection`：可用
+- `ParseAndVerifyPkiMessage`：可用（推荐）
+- `BuildProtectedPkiMessage`：可用（签名构建失败或算法不支持时建议业务侧回退 Java BC）
+- `BuildProtectedPkiMessage` 的外层 DER 组装由 **C shim + OpenSSL ASN.1 API** 完成（已移除 Rust 侧 TLV 组包路径）
+
+> `VerifyCmpPkiMessageProtection.verify_key_id` 建议导入证书（`KEY_KIND_CERTIFICATE`），或导入公钥时同时携带 `certificate_data`；仅裸公钥无法完成当前 CMP API 的信任链验证。
+
+#### 1.6.1 CMP 请求验签（推荐单 RPC）
+
+```mermaid
+sequenceDiagram
+  participant App as 业务服务
+  participant KS as KeyService
+  participant CMP as CmpService
+
+  App->>KS: ImportKey(证书或带证书公钥) [一次性]
+  KS-->>App: verify_key_id
+  App->>CMP: ParseAndVerifyPkiMessage(pki_message_der, verify_key_id)
+  CMP-->>App: valid + body_type / txId / nonce ...
+```
+
+**RPC 次数（不含业务逻辑）**：
+
+- 首次接入：`1 + 1 = 2` 次（`ImportKey` + `ParseAndVerify`）
+- 密钥已缓存后：每条 CMP 报文 `1` 次（`ParseAndVerify`）
+
+> 兼容场景仍可使用 `ParsePkiMessage` + `VerifyPkiMessageProtection` 双 RPC 组合。
+
+#### 1.6.2 CMP 响应构建（BuildProtectedPkiMessage）
+
+- 输入 `pki_header_der` + `pki_body_der` + `sign_key_id`，服务端构造受保护 `PKIMessage`
+- 支持按 `hash_algorithm` / `sign_algorithm` 生成 protection 和 protectionAlg
+- `ProtectedPart` 与 `PKIMessage` 外层结构由 C shim 统一编码，避免业务侧关心底层 TLV 细节
+- 失败场景（算法不支持、DER 非法、运行时 OpenSSL 能力不足）建议业务侧回退 Java BC
+
+#### 1.6.3 客户端调用建议（推荐落地）
+
+针对 Java/BC 主服务，推荐采用“**协议处理与密码运算分离**”：
+
+- 主服务（Java/BC）负责 CMP 业务编排与 ASN.1 组包
+- Offload 负责高成本密码运算（Parse+Verify、BuildProtected）
+- 仅在 Offload 失败/不支持时回退到 BC 本地实现
+
+**请求侧（入站报文）推荐调用顺序**
+
+1. `ParseAndVerifyPkiMessage`（单次 RPC，优先）
+2. 返回 `valid=true` 后再进入 RA/CA 业务逻辑
+3. 若返回 `FAILED_PRECONDITION(CMP_OPENSSL_UNSUPPORTED)` 或内部错误，回退 BC 解析+验签
+
+**响应侧（出站报文）推荐调用顺序**
+
+1. Java/BC 先完成 `pki_header_der` 与 `pki_body_der` 业务组装
+2. 调用 `BuildProtectedPkiMessage` 由 Offload 生成受保护 `PKIMessage`
+3. 若构建失败（不支持/参数不合法/运行时限制），回退 BC 本地构建并签名
+
+**回退判定建议**
+
+| Offload 返回 | 客户端动作 |
+|------|------|
+| `OK` | 直接使用 Offload 结果 |
+| `FAILED_PRECONDITION`（如 `CMP_OPENSSL_UNSUPPORTED`） | 立即 BC fallback |
+| `UNIMPLEMENTED` | 立即 BC fallback |
+| `INVALID_ARGUMENT` | 优先修正入参；必要时 BC fallback |
+| `RESOURCE_EXHAUSTED` | 触发限流/重试（带退避），并可临时 BC fallback |
+| `INTERNAL` | 记录告警并 BC fallback（保证业务连续性） |
+
+> 推荐实践：在网关/服务层增加 `cmp.offload.prefer=true` 开关，默认优先 Offload；当出现连续失败可自动降级到 BC。
+
+### 1.7 密钥存储模型（重要）
 
 **ImportKey 时服务端会一次性完成解析并缓存在内存中**，后续 Sign/Verify/CMS 只通过 `key_id` 取用已解析的 OpenSSL 对象：
 

@@ -3,12 +3,13 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 
 use crate::pb::v1::cms_service_client::CmsServiceClient;
+use crate::pb::v1::cmp_service_client::CmpServiceClient;
 use crate::pb::v1::key_service_client::KeyServiceClient;
 use crate::pb::v1::scep_ext_service_client::ScepExtServiceClient;
 use crate::pb::v1::scep_service_client::ScepServiceClient;
 use crate::pb::v1::sign_service_client::SignServiceClient;
 use crate::pb::v1::*;
-use crate::pool::{Pool, PoolConfig, PooledConn};
+use crate::pool::{Pool, PoolConfig};
 
 /// 高层客户端：从连接池借连接，执行 RPC 后自动归还。
 pub struct Client {
@@ -130,6 +131,63 @@ impl Client {
                 .await
                 .map(|r| r.into_inner())
                 .context("Verify cms rpc")
+        })
+        .await
+    }
+
+    pub async fn parse_cmp_pki_message(
+        &self,
+        req: ParseCmpPkiMessageRequest,
+    ) -> Result<ParseCmpPkiMessageResponse> {
+        self.with_cmp(|mut client| async move {
+            client
+                .parse_pki_message(req)
+                .await
+                .map(|r| r.into_inner())
+                .context("ParseCmpPkiMessage rpc")
+        })
+        .await
+    }
+
+    pub async fn verify_cmp_pki_message_protection(
+        &self,
+        req: VerifyCmpPkiMessageProtectionRequest,
+    ) -> Result<VerifyCmpPkiMessageProtectionResponse> {
+        self.with_cmp(|mut client| async move {
+            client
+                .verify_pki_message_protection(req)
+                .await
+                .map(|r| r.into_inner())
+                .context("VerifyCmpPkiMessageProtection rpc")
+        })
+        .await
+    }
+
+    /// 推荐路径：单次 RPC 完成 CMP parse + verify，减少交互次数。
+    pub async fn parse_and_verify_cmp_pki_message(
+        &self,
+        req: ParseAndVerifyCmpPkiMessageRequest,
+    ) -> Result<ParseAndVerifyCmpPkiMessageResponse> {
+        self.with_cmp(|mut client| async move {
+            client
+                .parse_and_verify_pki_message(req)
+                .await
+                .map(|r| r.into_inner())
+                .context("ParseAndVerifyCmpPkiMessage rpc")
+        })
+        .await
+    }
+
+    pub async fn build_cmp_protected_pki_message(
+        &self,
+        req: BuildCmpProtectedPkiMessageRequest,
+    ) -> Result<BuildCmpProtectedPkiMessageResponse> {
+        self.with_cmp(|mut client| async move {
+            client
+                .build_protected_pki_message(req)
+                .await
+                .map(|r| r.into_inner())
+                .context("BuildCmpProtectedPkiMessage rpc")
         })
         .await
     }
@@ -302,6 +360,16 @@ impl Client {
         let conn = self.pool.acquire().await?;
         let channel = conn.channel()?;
         f(CmsServiceClient::new(channel)).await
+    }
+
+    async fn with_cmp<F, Fut, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(CmpServiceClient<tonic::transport::Channel>) -> Fut,
+        Fut: std::future::Future<Output = Result<T>>,
+    {
+        let conn = self.pool.acquire().await?;
+        let channel = conn.channel()?;
+        f(CmpServiceClient::new(channel)).await
     }
 
     async fn with_scep<F, Fut, T>(&self, f: F) -> Result<T>

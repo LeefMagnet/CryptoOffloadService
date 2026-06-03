@@ -79,7 +79,9 @@ fn decode_context_utf8(der: &[u8], choice: u8) -> Result<Option<String>> {
     }
     let (len, hdr) = parse_der_length(&der[1..])?;
     let start = 1 + hdr;
-    let end = start.checked_add(len).ok_or_else(|| anyhow!("DER length overflow"))?;
+    let end = start
+        .checked_add(len)
+        .ok_or_else(|| anyhow!("DER length overflow"))?;
     if end > der.len() {
         return Ok(None);
     }
@@ -95,9 +97,7 @@ fn decode_context_utf8(der: &[u8], choice: u8) -> Result<Option<String>> {
     if s1 > inner.len() {
         return Ok(None);
     }
-    Ok(Some(
-        String::from_utf8_lossy(&inner[s0..s1]).into_owned(),
-    ))
+    Ok(Some(String::from_utf8_lossy(&inner[s0..s1]).into_owned()))
 }
 
 fn parse_der_length(bytes: &[u8]) -> Result<(usize, usize)> {

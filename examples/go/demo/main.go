@@ -173,7 +173,12 @@ func main() {
 	keys, _ := cli.ListKeys(ctx)
 	fmt.Printf("[ListKeys] count=%d\n", len(keys.GetKeys()))
 
-	// --- 7. SCEP 正向用例（来自 Rust 单测语义，按环境变量启用）---
+	// --- 7. CMP ParseAndVerify（按环境变量启用）---
+	if err := demoCmpParseAndVerify(ctx, cli, keyID); err != nil {
+		log.Fatalf("CMP ParseAndVerify: %v", err)
+	}
+
+	// --- 8. SCEP 正向用例（来自 Rust 单测语义，按环境变量启用）---
 	if err := demoScepPositiveCases(ctx, cli, keyID); err != nil {
 		log.Fatalf("SCEP positive cases: %v", err)
 	}
@@ -191,6 +196,38 @@ func main() {
 	//       })
 	//       // 国密 Enroll：BuildScepGmSuccessCertRep，同样设置 EnvelopeCipher
 	//   }()
+}
+
+// demoCmpParseAndVerify 演示 CMP 单次 RPC Parse + Verify。
+//
+// 环境变量：
+//   - CMP_PKI_MESSAGE_DER_B64 （必填，开启演示）
+//   - CMP_VERIFY_KEY_ID        （可选，默认 fallback 到 fallbackVerifyKeyID）
+func demoCmpParseAndVerify(ctx context.Context, cli *client.Client, fallbackVerifyKeyID string) error {
+	msgB64 := os.Getenv("CMP_PKI_MESSAGE_DER_B64")
+	if msgB64 == "" {
+		fmt.Println("[CMP] skip: set CMP_PKI_MESSAGE_DER_B64 to run ParseAndVerify example")
+		return nil
+	}
+	msgDER, err := base64.StdEncoding.DecodeString(msgB64)
+	if err != nil {
+		return fmt.Errorf("decode CMP_PKI_MESSAGE_DER_B64: %w", err)
+	}
+	verifyKeyID := os.Getenv("CMP_VERIFY_KEY_ID")
+	if verifyKeyID == "" {
+		verifyKeyID = fallbackVerifyKeyID
+		fmt.Printf("[CMP] warning: CMP_VERIFY_KEY_ID not set, fallback to key_id=%s\n", verifyKeyID)
+	}
+	resp, err := cli.ParseAndVerifyCmpPkiMessage(ctx, &pb.ParseAndVerifyCmpPkiMessageRequest{
+		PkiMessageDer: msgDER,
+		VerifyKeyId:   verifyKeyID,
+	})
+	if err != nil {
+		return fmt.Errorf("ParseAndVerifyCmpPkiMessage: %w", err)
+	}
+	fmt.Printf("[CMP ParseAndVerify] valid=%v body_type=%d tx_len=%d recip_nonce_len=%d\n",
+		resp.GetValid(), resp.GetBodyType(), len(resp.GetTransactionId()), len(resp.GetRecipientNonce()))
+	return nil
 }
 
 // demoConcurrentSigns 用 goroutine 并发发起多条 Sign RPC。

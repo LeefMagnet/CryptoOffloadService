@@ -6,9 +6,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, PoisonError, RwLock};
 use uuid::Uuid;
 
-use crate::pb::{
-    HashAlgorithm, KeyFormat, KeyKind, KeyLifetime, KeyMetadata, SignAlgorithm,
-};
+use crate::pb::{HashAlgorithm, KeyFormat, KeyKind, KeyLifetime, KeyMetadata, SignAlgorithm};
 
 /// 进程内密钥仓库（**内存态，非磁盘持久化**）。
 ///
@@ -111,7 +109,10 @@ impl KeyStore {
                 let key = cert
                     .public_key()
                     .context("failed to extract public key from certificate")?;
-                KeyMaterial::Public { key, cert: Some(cert) }
+                KeyMaterial::Public {
+                    key,
+                    cert: Some(cert),
+                }
             }
             KeyKind::Unspecified => unreachable!(),
         };
@@ -188,8 +189,8 @@ impl KeyStore {
             bail!("temporary key already consumed: {key_id}");
         }
 
-        let lifetime = KeyLifetime::try_from(entry.metadata.lifetime)
-            .unwrap_or(KeyLifetime::Unspecified);
+        let lifetime =
+            KeyLifetime::try_from(entry.metadata.lifetime).unwrap_or(KeyLifetime::Unspecified);
         entry.metadata.used = true;
         let material = entry.material.clone();
 
@@ -285,7 +286,9 @@ pub fn resolve_hash_algorithm(
     if sign_alg == SignAlgorithm::SignSm2 {
         let h = HashAlgorithm::try_from(hash).unwrap_or(HashAlgorithm::Unspecified);
         return match h {
-            HashAlgorithm::Unspecified | HashAlgorithm::HashSm3 => Ok(HashAlgorithm::HashSm3 as i32),
+            HashAlgorithm::Unspecified | HashAlgorithm::HashSm3 => {
+                Ok(HashAlgorithm::HashSm3 as i32)
+            }
             _ => bail!("SM2 requires SM3 hash algorithm"),
         };
     }
@@ -302,7 +305,8 @@ pub fn infer_sign_algorithm(material: &KeyMaterial, requested: i32) -> Result<Si
         KeyMaterial::Public { key, .. } => key.id(),
     };
     if requested != SignAlgorithm::Unspecified as i32 {
-        let req = SignAlgorithm::try_from(requested).map_err(|_| anyhow!("invalid sign algorithm"))?;
+        let req =
+            SignAlgorithm::try_from(requested).map_err(|_| anyhow!("invalid sign algorithm"))?;
         validate_sign_algorithm_for_key(id, req)?;
         return Ok(req);
     }
@@ -346,7 +350,9 @@ pub fn ensure_public(material: &KeyMaterial) -> Result<&PKey<Public>> {
 
 pub fn signing_cert(material: &KeyMaterial) -> Result<X509> {
     match material {
-        KeyMaterial::Private { cert: Some(cert), .. } => Ok(cert.clone()),
+        KeyMaterial::Private {
+            cert: Some(cert), ..
+        } => Ok(cert.clone()),
         KeyMaterial::Private { cert: None, .. } => {
             bail!("CMS build requires certificate imported with private key")
         }
@@ -364,5 +370,20 @@ pub fn ca_private_with_cert(material: &KeyMaterial) -> Result<(PKey<Private>, X5
             bail!("SCEP CA requires certificate imported with private key")
         }
         KeyMaterial::Public { .. } => bail!("SCEP CA requires a private key"),
+    }
+}
+
+/// CMP 保护验签要求可用证书链入口；仅接受带证书的密钥条目。
+pub fn verifying_cert(material: &KeyMaterial) -> Result<X509> {
+    match material {
+        KeyMaterial::Public {
+            cert: Some(cert), ..
+        }
+        | KeyMaterial::Private {
+            cert: Some(cert), ..
+        } => Ok(cert.clone()),
+        _ => bail!(
+            "CMP verify requires certificate-backed key (import KeyKind::Certificate or include certificate_data)"
+        ),
     }
 }

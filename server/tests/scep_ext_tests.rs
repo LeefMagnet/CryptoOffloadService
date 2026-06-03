@@ -38,15 +38,18 @@ fn scep_ext_decode_malformed_der_returns_error_not_panic() {
     for der in malformed_cases {
         let outcome = std::panic::catch_unwind(|| crypto_scep_ext::decode_cert_alias_content(&der));
         assert!(outcome.is_ok(), "malformed DER should not panic");
-        assert!(outcome.expect("decode run").is_err(), "malformed DER should be rejected");
+        assert!(
+            outcome.expect("decode run").is_err(),
+            "malformed DER should be rejected"
+        );
     }
 }
 
 #[test]
 fn scep_ext_parse_signed_attributes_from_certrep() {
     openssl_init::init();
-    use crypto_offload_server::cryptooffload::v1::{KeyFormat, KeyKind, KeyLifetime};
     use crypto_offload_server::crypto_scep;
+    use crypto_offload_server::cryptooffload::v1::{KeyFormat, KeyKind, KeyLifetime};
     use crypto_offload_server::key_store::KeyStore;
     use crypto_offload_server::test_support::generate_rsa2048_der_cert;
 
@@ -86,8 +89,8 @@ fn scep_ext_parse_signed_attributes_from_certrep() {
 #[test]
 fn scep_ext_parse_enroll_pkio() {
     openssl_init::init();
-    use crypto_offload_server::cryptooffload::v1::{KeyFormat, KeyKind, KeyLifetime};
     use crypto_offload_server::crypto_scep;
+    use crypto_offload_server::cryptooffload::v1::{KeyFormat, KeyKind, KeyLifetime};
     use crypto_offload_server::key_store::KeyStore;
     use crypto_offload_server::test_support::{generate_rsa2048_der_cert, generate_scep_pkio};
     use openssl::x509::X509;
@@ -117,8 +120,7 @@ fn scep_ext_parse_enroll_pkio() {
 
     // 与 ScepService.ParseRequest 结果一致
     let access2 = store.access_key(&meta.key_id).expect("access");
-    let (csr2, wrapper2) =
-        crypto_scep::parse_request(&pkio, access2, None).expect("parse request");
+    let (csr2, wrapper2) = crypto_scep::parse_request(&pkio, access2, None).expect("parse request");
     assert_eq!(resp.csr_der, csr2);
     assert_eq!(resp.wrapper_cert_der, wrapper2);
 }
@@ -134,9 +136,11 @@ fn scep_ext_parse_getcert_pkio() {
     let store = KeyStore::new();
     let (ca_pem, ca_der) = generate_rsa2048_der_cert().expect("ca");
     let ca_cert = X509::from_der(&ca_der).expect("cert");
-    let (pkio, inner, _wrapper) =
-        generate_getcert_pkio(&ca_cert, "iot-device-001").expect("pkio");
-    assert_eq!(inner, crypto_scep_ext::encode_cert_alias_content(1, "iot-device-001").unwrap());
+    let (pkio, inner, _wrapper) = generate_getcert_pkio(&ca_cert, "iot-device-001").expect("pkio");
+    assert_eq!(
+        inner,
+        crypto_scep_ext::encode_cert_alias_content(1, "iot-device-001").unwrap()
+    );
 
     let meta = store
         .import_key(

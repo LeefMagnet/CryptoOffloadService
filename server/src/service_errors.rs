@@ -19,6 +19,9 @@ pub fn map_crypto_err(err: anyhow::Error) -> Status {
     if is_invalid_argument_crypto(&msg) {
         return Status::invalid_argument(msg);
     }
+    if is_resource_exhausted_crypto(&msg) {
+        return Status::resource_exhausted(msg);
+    }
     if msg.contains("lock poisoned") {
         return Status::unavailable(msg);
     }
@@ -35,4 +38,31 @@ fn is_invalid_argument_crypto(msg: &str) -> bool {
         || m.contains("key not found")
         || m.contains("already consumed")
         || m.contains("too large")
+}
+
+fn is_resource_exhausted_crypto(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    m.contains("resource_exhausted") || m.contains("memory allocation failed")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::map_crypto_err;
+    use tonic::Code;
+
+    #[test]
+    fn map_crypto_err_maps_cmp_shim_invalid_argument() {
+        let err = anyhow::anyhow!("CMP_SHIM_INVALID_ARGUMENT(build_pki_message): bad der");
+        let status = map_crypto_err(err);
+        assert_eq!(status.code(), Code::InvalidArgument);
+    }
+
+    #[test]
+    fn map_crypto_err_maps_cmp_shim_resource_exhausted() {
+        let err = anyhow::anyhow!(
+            "CMP_SHIM_RESOURCE_EXHAUSTED(build_pki_message): memory allocation failed"
+        );
+        let status = map_crypto_err(err);
+        assert_eq!(status.code(), Code::ResourceExhausted);
+    }
 }

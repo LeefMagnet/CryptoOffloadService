@@ -1,16 +1,17 @@
 //! gRPC 端到端集成测试：启动真实服务并验证 Key / Sign / CMS 全流程。
 
+use crypto_offload_server::cryptooffload::v1::cmp_service_client::CmpServiceClient;
 use crypto_offload_server::cryptooffload::v1::cms_service_client::CmsServiceClient;
 use crypto_offload_server::cryptooffload::v1::key_service_client::KeyServiceClient;
 use crypto_offload_server::cryptooffload::v1::scep_ext_service_client::ScepExtServiceClient;
 use crypto_offload_server::cryptooffload::v1::scep_service_client::ScepServiceClient;
 use crypto_offload_server::cryptooffload::v1::sign_service_client::SignServiceClient;
 use crypto_offload_server::cryptooffload::v1::{
-    BuildCmsRequest, BuildScepFailureCertRepRequest, BuildScepPendingCertRepRequest,
-    BuildScepSuccessCertRepRequest,
-    GetKeyInfoRequest, HashAlgorithm, ImportKeyRequest, KeyFormat, KeyKind, KeyLifetime,
-    ListKeysRequest, ParseEnrollPkioRequest, ParseGetCertPkioRequest, ParseScepRequestRequest, SignAlgorithm, SignRequest,
-    VerifyCmsRequest, VerifyRequest,
+    BuildCmpProtectedPkiMessageRequest, BuildCmsRequest, BuildScepFailureCertRepRequest,
+    BuildScepPendingCertRepRequest, BuildScepSuccessCertRepRequest, GetKeyInfoRequest,
+    HashAlgorithm, ImportKeyRequest, KeyFormat, KeyKind, KeyLifetime, ListKeysRequest,
+    ParseAndVerifyCmpPkiMessageRequest, ParseEnrollPkioRequest, ParseGetCertPkioRequest,
+    ParseScepRequestRequest, SignAlgorithm, SignRequest, VerifyCmsRequest, VerifyRequest,
 };
 use crypto_offload_server::run_server;
 use crypto_offload_server::test_support::{
@@ -320,9 +321,7 @@ async fn grpc_temporary_key_consumed() {
         .await
         .expect("sign");
 
-    let info = key_client
-        .get_key_info(GetKeyInfoRequest { key_id })
-        .await;
+    let info = key_client.get_key_info(GetKeyInfoRequest { key_id }).await;
     assert!(info.is_err(), "temporary key should be removed");
 }
 
@@ -507,8 +506,7 @@ async fn grpc_scep_ext_parse_enroll_pkio() {
 
     let (ca_pem, ca_der) = generate_rsa2048_der_cert().expect("ca");
     let ca_cert = X509::from_der(&ca_der).expect("ca cert");
-    let (pkio_der, expected_csr, expected_wrapper) =
-        generate_scep_pkio(&ca_cert).expect("pkio");
+    let (pkio_der, expected_csr, expected_wrapper) = generate_scep_pkio(&ca_cert).expect("pkio");
 
     let mut key_client = KeyServiceClient::new(channel.clone());
     let mut ext_client = ScepExtServiceClient::new(channel);
@@ -914,5 +912,119 @@ async fn grpc_scep_success_certrep_envelope_ciphers() {
             .unwrap_or_else(|e| panic!("build success certrep cipher={cipher}: {e}"))
             .into_inner();
         assert!(!resp.certrep_der.is_empty(), "cipher {cipher}");
+    }
+}
+
+#[tokio::test]
+async fn grpc_cmp_build_succeeds_or_reports_unsupported() {
+    let url = start_test_server().await;
+    let channel = tonic::transport::Channel::from_shared(url)
+        .unwrap()
+        .connect()
+        .await
+        .expect("connect");
+    let mut key_client = KeyServiceClient::new(channel.clone());
+    let mut cmp_client = CmpServiceClient::new(channel);
+    let (priv_pem, _cert_der) = generate_rsa2048_pem().expect("rsa key");
+    let sign_key_id = key_client
+        .import_key(ImportKeyRequest {
+            kind: KeyKind::Private as i32,
+            lifetime: KeyLifetime::Permanent as i32,
+            format: KeyFormat::Pem as i32,
+            key_data: priv_pem,
+            ..Default::default()
+        })
+        .await
+        .expect("import key")
+        .into_inner()
+        .metadata
+        .expect("metadata")
+        .key_id;
+
+    let result = cmp_client
+        .build_protected_pki_message(BuildCmpProtectedPkiMessageRequest {
+            pki_header_der: vec![0x30, 0x03, 0x02, 0x01, 0x02],
+            pki_body_der: vec![0xa0, 0x00],
+            sign_key_id,
+            hash_algorithm: HashAlgorithm::HashSha256 as i32,
+            sign_algorithm: SignAlgorithm::SignRsaPkcs1V15 as i32,
+        })
+        .await;
+
+    match result {
+        Ok(resp) => {
+            assert!(!resp.into_inner().pki_message_der.is_empty());
+        }
+        Err(err) => {
+            assert_eq!(err.code(), Code::FailedPrecondition);
+        }
+    }
+}
+
+#[tokio::test]
+async fn grpc_cmp_parse_and_verify_validates_required_fields() {
+    let url = start_test_server().await;
+    let channel = tonic::transport::Channel::from_shared(url)
+        .unwrap()
+        .connect()
+        .await
+        .expect("connect");
+    let mut cmp_client = CmpServiceClient::new(channel);
+    let err = cmp_client
+        .parse_and_verify_pki_message(ParseAndVerifyCmpPkiMessageRequest {
+            pki_message_der: vec![0x30, 0x00],
+            verify_key_id: String::new(),
+            ..Default::default()
+        })
+        .await
+        .expect_err("verify_key_id is required");
+    assert_eq!(err.code(), Code::InvalidArgument);
+}
+
+#[tokio::test]
+async fn grpc_cmp_build_invalid_der_reports_invalid_argument_or_unsupported() {
+    let url = start_test_server().await;
+    let channel = tonic::transport::Channel::from_shared(url)
+        .unwrap()
+        .connect()
+        .await
+        .expect("connect");
+    let mut key_client = KeyServiceClient::new(channel.clone());
+    let mut cmp_client = CmpServiceClient::new(channel);
+    let (priv_pem, _cert_der) = generate_rsa2048_pem().expect("rsa key");
+    let sign_key_id = key_client
+        .import_key(ImportKeyRequest {
+            kind: KeyKind::Private as i32,
+            lifetime: KeyLifetime::Permanent as i32,
+            format: KeyFormat::Pem as i32,
+            key_data: priv_pem,
+            ..Default::default()
+        })
+        .await
+        .expect("import key")
+        .into_inner()
+        .metadata
+        .expect("metadata")
+        .key_id;
+
+    let result = cmp_client
+        .build_protected_pki_message(BuildCmpProtectedPkiMessageRequest {
+            // 非法 header：INTEGER，不是 PKIHeader DER SEQUENCE
+            pki_header_der: vec![0x02, 0x01, 0x01],
+            pki_body_der: vec![0xa0, 0x00],
+            sign_key_id,
+            hash_algorithm: HashAlgorithm::HashSha256 as i32,
+            sign_algorithm: SignAlgorithm::SignRsaPkcs1V15 as i32,
+        })
+        .await;
+
+    match result {
+        Ok(_) => panic!("invalid pki_header_der should not succeed"),
+        Err(err) => {
+            assert!(
+                err.code() == Code::InvalidArgument || err.code() == Code::FailedPrecondition,
+                "unexpected status: {err}"
+            );
+        }
     }
 }

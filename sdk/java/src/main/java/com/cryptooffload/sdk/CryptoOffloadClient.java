@@ -2,12 +2,15 @@ package com.cryptooffload.sdk;
 
 import cryptooffload.v1.BuildCmsRequest;
 import cryptooffload.v1.BuildCmsResponse;
+import cryptooffload.v1.BuildCmpProtectedPkiMessageRequest;
+import cryptooffload.v1.BuildCmpProtectedPkiMessageResponse;
 import cryptooffload.v1.BuildScepCertRepResponse;
 import cryptooffload.v1.BuildScepFailureCertRepRequest;
 import cryptooffload.v1.BuildScepGmSuccessCertRepRequest;
 import cryptooffload.v1.BuildScepPendingCertRepRequest;
 import cryptooffload.v1.BuildScepSuccessCertRepRequest;
 import cryptooffload.v1.CmsServiceGrpc;
+import cryptooffload.v1.CmpServiceGrpc;
 import cryptooffload.v1.DecodeCertAliasContentRequest;
 import cryptooffload.v1.DecodeCertAliasContentResponse;
 import cryptooffload.v1.EncodeCertAliasContentRequest;
@@ -17,6 +20,10 @@ import cryptooffload.v1.ImportKeyResponse;
 import cryptooffload.v1.KeyServiceGrpc;
 import cryptooffload.v1.ParseCmsRequest;
 import cryptooffload.v1.ParseCmsResponse;
+import cryptooffload.v1.ParseAndVerifyCmpPkiMessageRequest;
+import cryptooffload.v1.ParseAndVerifyCmpPkiMessageResponse;
+import cryptooffload.v1.ParseCmpPkiMessageRequest;
+import cryptooffload.v1.ParseCmpPkiMessageResponse;
 import cryptooffload.v1.ParseEnrollPkioRequest;
 import cryptooffload.v1.ParseEnrollPkioResponse;
 import cryptooffload.v1.ParseGetCertPkioRequest;
@@ -32,6 +39,8 @@ import cryptooffload.v1.SignResponse;
 import cryptooffload.v1.SignServiceGrpc;
 import cryptooffload.v1.VerifyCmsRequest;
 import cryptooffload.v1.VerifyCmsResponse;
+import cryptooffload.v1.VerifyCmpPkiMessageProtectionRequest;
+import cryptooffload.v1.VerifyCmpPkiMessageProtectionResponse;
 import cryptooffload.v1.VerifyRequest;
 import cryptooffload.v1.VerifyResponse;
 
@@ -96,6 +105,36 @@ public final class CryptoOffloadClient implements AutoCloseable {
     public VerifyCmsResponse verifyCms(VerifyCmsRequest request) throws InterruptedException {
         try (GrpcConnectionPool.PooledConn conn = pool.acquire()) {
             return CmsServiceGrpc.newBlockingStub(conn.channel()).verify(request);
+        }
+    }
+
+    public ParseCmpPkiMessageResponse parseCmpPkiMessage(ParseCmpPkiMessageRequest request)
+            throws InterruptedException {
+        try (GrpcConnectionPool.PooledConn conn = pool.acquire()) {
+            return CmpServiceGrpc.newBlockingStub(conn.channel()).parsePkiMessage(request);
+        }
+    }
+
+    public VerifyCmpPkiMessageProtectionResponse verifyCmpPkiMessageProtection(
+            VerifyCmpPkiMessageProtectionRequest request) throws InterruptedException {
+        try (GrpcConnectionPool.PooledConn conn = pool.acquire()) {
+            return CmpServiceGrpc.newBlockingStub(conn.channel()).verifyPkiMessageProtection(request);
+        }
+    }
+
+    /** 推荐路径：单次 RPC 完成 CMP parse + verify，减少交互次数。 */
+    public ParseAndVerifyCmpPkiMessageResponse parseAndVerifyCmpPkiMessage(
+            ParseAndVerifyCmpPkiMessageRequest request) throws InterruptedException {
+        try (GrpcConnectionPool.PooledConn conn = pool.acquire()) {
+            return CmpServiceGrpc.newBlockingStub(conn.channel()).parseAndVerifyPkiMessage(request);
+        }
+    }
+
+    /** 当前服务端可能返回 UNIMPLEMENTED（建议业务侧 fallback 到 Java BC）。 */
+    public BuildCmpProtectedPkiMessageResponse buildCmpProtectedPkiMessage(
+            BuildCmpProtectedPkiMessageRequest request) throws InterruptedException {
+        try (GrpcConnectionPool.PooledConn conn = pool.acquire()) {
+            return CmpServiceGrpc.newBlockingStub(conn.channel()).buildProtectedPkiMessage(request);
         }
     }
 

@@ -7,6 +7,7 @@ import cryptooffload.v1.ImportKeyRequest;
 import cryptooffload.v1.KeyFormat;
 import cryptooffload.v1.KeyKind;
 import cryptooffload.v1.KeyLifetime;
+import cryptooffload.v1.ParseAndVerifyCmpPkiMessageRequest;
 import cryptooffload.v1.SignAlgorithm;
 import cryptooffload.v1.SignRequest;
 import cryptooffload.v1.SignResponse;
@@ -86,9 +87,42 @@ public final class Demo {
             // --- 3. 并发 Sign 演示：模拟多请求同时 offload（需 Java 21+）---
             demoConcurrentSigns(client, keyId);
 
-            // --- 4. SCEP 正向用例（来自 Rust 单测语义，按环境变量启用）---
+            // --- 4. CMP ParseAndVerify（按环境变量启用）---
+            demoCmpParseAndVerify(client, keyId);
+
+            // --- 5. SCEP 正向用例（来自 Rust 单测语义，按环境变量启用）---
             demoScepPositiveCases(client, keyId);
         }
+    }
+
+    /**
+     * CMP 单次 RPC Parse + Verify 演示。
+     *
+     * <p>环境变量：
+     * <ul>
+     *   <li>CMP_PKI_MESSAGE_DER_B64（必填，开启演示）</li>
+     *   <li>CMP_VERIFY_KEY_ID（可选，默认 fallback 到 fallbackVerifyKeyId）</li>
+     * </ul>
+     */
+    private static void demoCmpParseAndVerify(CryptoOffloadClient client, String fallbackVerifyKeyId)
+            throws Exception {
+        String msgB64 = System.getenv("CMP_PKI_MESSAGE_DER_B64");
+        if (msgB64 == null || msgB64.isBlank()) {
+            System.out.println("[CMP] skip: set CMP_PKI_MESSAGE_DER_B64 to run ParseAndVerify example");
+            return;
+        }
+        byte[] pkiMessageDer = Base64.getDecoder().decode(msgB64);
+        String verifyKeyId = System.getenv("CMP_VERIFY_KEY_ID");
+        if (verifyKeyId == null || verifyKeyId.isBlank()) {
+            verifyKeyId = fallbackVerifyKeyId;
+            System.out.printf("[CMP] warning: CMP_VERIFY_KEY_ID not set, fallback to key_id=%s%n", verifyKeyId);
+        }
+        var resp = client.parseAndVerifyCmpPkiMessage(ParseAndVerifyCmpPkiMessageRequest.newBuilder()
+                .setPkiMessageDer(com.google.protobuf.ByteString.copyFrom(pkiMessageDer))
+                .setVerifyKeyId(verifyKeyId)
+                .build());
+        System.out.printf("[CMP ParseAndVerify] valid=%s body_type=%d tx_len=%d recip_nonce_len=%d%n",
+                resp.getValid(), resp.getBodyType(), resp.getTransactionId().size(), resp.getRecipientNonce().size());
     }
 
     /**

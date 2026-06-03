@@ -1,0 +1,106 @@
+syntax = "proto3";
+
+package cryptooffload.v1;
+
+import "cryptooffload/v1/common.proto";
+
+option go_package = "github.com/cryptooffload/sdk-go/gen/cryptooffload/v1;cryptooffloadv1";
+option java_package = "cryptooffload.v1";
+option java_multiple_files = true;
+
+// CMP offload（RFC 9810 / RFC 9811）：
+// - 解析 PKIMessage 关键字段
+// - 验证 signature-based protection
+// - 构建带 protection 的 PKIMessage
+service CmpService {
+  rpc ParsePkiMessage(ParseCmpPkiMessageRequest) returns (ParseCmpPkiMessageResponse);
+  rpc VerifyPkiMessageProtection(VerifyCmpPkiMessageProtectionRequest)
+      returns (VerifyCmpPkiMessageProtectionResponse);
+  // 推荐主路径：单次 RPC 同时完成 parse + verify，减少网络往返。
+  rpc ParseAndVerifyPkiMessage(ParseAndVerifyCmpPkiMessageRequest)
+      returns (ParseAndVerifyCmpPkiMessageResponse);
+  rpc BuildProtectedPkiMessage(BuildCmpProtectedPkiMessageRequest)
+      returns (BuildCmpProtectedPkiMessageResponse);
+}
+
+message ParseCmpPkiMessageRequest {
+  bytes pki_message_der = 1;
+}
+
+message ParseCmpPkiMessageResponse {
+  // PKIBody 的 context-specific tag number（例如 ir=0, ip=1, cr=2）
+  int32 body_type = 1;
+  // protectionAlg OID（例如 1.2.840.113549.1.1.11）
+  string protection_alg_oid = 2;
+  // [1] protection BIT STRING（去掉 unused-bits 字节后的签名值）
+  bytes protection = 3;
+  // DER( SEQUENCE { header, body } )，即 protectedPart
+  bytes protected_part_der = 4;
+  // 原始 PKIHeader DER（含 TLV）
+  bytes pki_header_der = 5;
+  // 原始 PKIBody DER（含 TLV）
+  bytes pki_body_der = 6;
+  // header[4] transactionID
+  bytes transaction_id = 7;
+  // header[5] senderNonce
+  bytes sender_nonce = 8;
+  // header[6] recipNonce
+  bytes recipient_nonce = 9;
+}
+
+message VerifyCmpPkiMessageProtectionRequest {
+  bytes pki_message_der = 1;
+  string verify_key_id = 2;
+  // 可选覆盖：默认按 protectionAlg OID 自动推断
+  HashAlgorithm hash_algorithm = 3;
+  // 可选覆盖：默认按 protectionAlg OID 自动推断
+  SignAlgorithm sign_algorithm = 4;
+}
+
+message VerifyCmpPkiMessageProtectionResponse {
+  bool valid = 1;
+  string protection_alg_oid = 2;
+  HashAlgorithm hash_algorithm = 3;
+  SignAlgorithm sign_algorithm = 4;
+}
+
+message ParseAndVerifyCmpPkiMessageRequest {
+  bytes pki_message_der = 1;
+  string verify_key_id = 2;
+  // 可选覆盖：默认按 protectionAlg OID 自动推断
+  HashAlgorithm hash_algorithm = 3;
+  // 可选覆盖：默认按 protectionAlg OID 自动推断
+  SignAlgorithm sign_algorithm = 4;
+}
+
+message ParseAndVerifyCmpPkiMessageResponse {
+  bool valid = 1;
+  string protection_alg_oid = 2;
+  HashAlgorithm hash_algorithm = 3;
+  SignAlgorithm sign_algorithm = 4;
+  int32 body_type = 5;
+  bytes pki_header_der = 6;
+  bytes pki_body_der = 7;
+  bytes transaction_id = 8;
+  bytes sender_nonce = 9;
+  bytes recipient_nonce = 10;
+}
+
+message BuildCmpProtectedPkiMessageRequest {
+  // 原始 PKIHeader DER（含 TLV）
+  bytes pki_header_der = 1;
+  // 原始 PKIBody DER（含 TLV）
+  bytes pki_body_der = 2;
+  string sign_key_id = 3;
+  // 允许按密钥类型自动推断；对 RSA/ECDSA 建议显式传入
+  HashAlgorithm hash_algorithm = 4;
+  // 允许按密钥类型自动推断
+  SignAlgorithm sign_algorithm = 5;
+}
+
+message BuildCmpProtectedPkiMessageResponse {
+  bytes pki_message_der = 1;
+  string protection_alg_oid = 2;
+  HashAlgorithm hash_algorithm = 3;
+  SignAlgorithm sign_algorithm = 4;
+}

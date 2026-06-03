@@ -194,6 +194,67 @@ func (c *Client) VerifyCMS(ctx context.Context, req *pb.VerifyCmsRequest) (*pb.V
 	return resp, err
 }
 
+// ParseCmpPkiMessage 解析 CMP PKIMessage 关键字段（OpenSSL 3.x CMP）。
+func (c *Client) ParseCmpPkiMessage(ctx context.Context, req *pb.ParseCmpPkiMessageRequest) (*pb.ParseCmpPkiMessageResponse, error) {
+	var resp *pb.ParseCmpPkiMessageResponse
+	err := c.withConn(ctx, func(conn *pool.Conn) error {
+		cli := pb.NewCmpServiceClient(conn.GRPC())
+		out, err := cli.ParsePkiMessage(ctx, req)
+		if err != nil {
+			return err
+		}
+		resp = out
+		return nil
+	})
+	return resp, err
+}
+
+// VerifyCmpPkiMessageProtection 验证 CMP PKIProtection（签名保护）。
+func (c *Client) VerifyCmpPkiMessageProtection(ctx context.Context, req *pb.VerifyCmpPkiMessageProtectionRequest) (*pb.VerifyCmpPkiMessageProtectionResponse, error) {
+	var resp *pb.VerifyCmpPkiMessageProtectionResponse
+	err := c.withConn(ctx, func(conn *pool.Conn) error {
+		cli := pb.NewCmpServiceClient(conn.GRPC())
+		out, err := cli.VerifyPkiMessageProtection(ctx, req)
+		if err != nil {
+			return err
+		}
+		resp = out
+		return nil
+	})
+	return resp, err
+}
+
+// ParseAndVerifyCmpPkiMessage 单次 RPC 完成 CMP parse + verify，减少交互次数。
+func (c *Client) ParseAndVerifyCmpPkiMessage(ctx context.Context, req *pb.ParseAndVerifyCmpPkiMessageRequest) (*pb.ParseAndVerifyCmpPkiMessageResponse, error) {
+	var resp *pb.ParseAndVerifyCmpPkiMessageResponse
+	err := c.withConn(ctx, func(conn *pool.Conn) error {
+		cli := pb.NewCmpServiceClient(conn.GRPC())
+		out, err := cli.ParseAndVerifyPkiMessage(ctx, req)
+		if err != nil {
+			return err
+		}
+		resp = out
+		return nil
+	})
+	return resp, err
+}
+
+// BuildCmpProtectedPkiMessage 构建受保护 CMP 报文。
+// 注意：当前服务端可能返回 UNIMPLEMENTED（建议业务侧 fallback 到 Java BC）。
+func (c *Client) BuildCmpProtectedPkiMessage(ctx context.Context, req *pb.BuildCmpProtectedPkiMessageRequest) (*pb.BuildCmpProtectedPkiMessageResponse, error) {
+	var resp *pb.BuildCmpProtectedPkiMessageResponse
+	err := c.withConn(ctx, func(conn *pool.Conn) error {
+		cli := pb.NewCmpServiceClient(conn.GRPC())
+		out, err := cli.BuildProtectedPkiMessage(ctx, req)
+		if err != nil {
+			return err
+		}
+		resp = out
+		return nil
+	})
+	return resp, err
+}
+
 // ParseScepRequest 解析 SCEP PKIO 请求。
 func (c *Client) ParseScepRequest(ctx context.Context, req *pb.ParseScepRequestRequest) (*pb.ParseScepRequestResponse, error) {
 	var resp *pb.ParseScepRequestResponse

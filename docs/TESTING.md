@@ -18,6 +18,7 @@
 - OpenSSL **3.x**，且加载 **legacy provider**（3DES EnvelopedData 依赖此项）。
 - Debian bookworm 等需：`apt install openssl-provider-legacy`。
 - SM2 相关用例在 OpenSSL 无国密支持时会 **skip** 或失败（视用例而定）。
+- 若在 WSL 使用自编译 OpenSSL（如 `/opt/openssl30x`、`/opt/openssl35x`），请同时设置 `OPENSSL_DIR` / `OPENSSL_LIB_DIR` / `OPENSSL_INCLUDE_DIR` / `PKG_CONFIG_PATH` / `LD_LIBRARY_PATH`。
 
 **测试文件位置**
 
@@ -27,8 +28,8 @@
 | `server/tests/sign_verify_tests.rs` | 单元 | 11 |
 | `server/tests/scep_tests.rs` | 单元 | 14 |
 | `server/tests/scep_ext_tests.rs` | 单元 | 5 |
-| `server/tests/integration_test.rs` | 集成（gRPC） | 14 |
-| **合计** | | **51** |
+| `server/tests/integration_test.rs` | 集成（gRPC） | 16 |
+| **合计** | | **53** |
 
 > 压测场景见 [BENCHMARK_AND_TUNING.md](./BENCHMARK_AND_TUNING.md)（`crypto-offload-benchmark` 二进制，非 `cargo test`）。
 
@@ -196,6 +197,16 @@ SCEP 扩展：CertAlias 编解码、SignedAttributes 提取、Enroll / GetCert P
 |------|-----|--------|
 | `grpc_scep_ext_parse_enroll_pkio` | ParseEnrollPkio | Enroll PKIO → CSR + attrs + wrapper |
 | `grpc_scep_ext_parse_getcert_pkio` | ParseGetCertPkio | GetCert PKIO → CertAlias + wrapper |
+
+### 7.4 CmpService（OpenSSL 3.x 路径）
+
+| 用例 | RPC | 验证点 |
+|------|-----|--------|
+| `grpc_cmp_build_succeeds_or_reports_unsupported` | BuildProtectedPkiMessage | OpenSSL 支持时可构建受保护 PKIMessage；不支持时返回 `FAILED_PRECONDITION` |
+| `grpc_cmp_parse_and_verify_validates_required_fields` | ParseAndVerifyPkiMessage | 单 RPC Parse+Verify 路径的参数校验（`verify_key_id` 必填） |
+| `grpc_cmp_build_invalid_der_reports_invalid_argument_or_unsupported` | BuildProtectedPkiMessage | 非法 DER 入参返回 `INVALID_ARGUMENT`；若环境不支持 CMP 则返回 `FAILED_PRECONDITION` |
+
+> CMP Build 路径当前采用 **C shim + OpenSSL ASN.1** 组包，重点回归 `grpc_cmp_build_succeeds_or_reports_unsupported`。
 
 ---
 

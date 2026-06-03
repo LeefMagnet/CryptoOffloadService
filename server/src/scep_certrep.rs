@@ -10,7 +10,7 @@ use openssl::pkey::{Id, PKeyRef, Private};
 use openssl::rand::rand_bytes;
 use openssl::stack::Stack;
 use openssl::symm::Cipher;
-use openssl::x509::{X509, X509Ref};
+use openssl::x509::{X509Ref, X509};
 use openssl_sys as ffi;
 use std::ffi::CString;
 use std::os::raw::c_int;
@@ -161,11 +161,8 @@ pub fn build_gm_success_certrep(
         params.sender_nonce
     };
 
-    let inner_der = build_gm_inner_signed_data(
-        params.sign_cert,
-        params.encryption_cert,
-        params.skf_content,
-    )?;
+    let inner_der =
+        build_gm_inner_signed_data(params.sign_cert, params.encryption_cert, params.skf_content)?;
     let cipher = resolve_envelope_cipher(params.envelope_cipher)?;
     let enveloped_der = encrypt_envelope_with_cipher(
         params.wrapper_cert,
@@ -203,17 +200,17 @@ pub fn build_gm_inner_signed_data(
         ffi::init();
         let p7 = cvt_p(ffi::PKCS7_new()).context("PKCS7_new")?;
         let p7 = Pkcs7::from_ptr(p7);
-        cvt(ffi::PKCS7_set_type(
-            p7.as_ptr(),
-            Nid::PKCS7_SIGNED.as_raw(),
-        ))
-        .context("PKCS7_set_type")?;
+        cvt(ffi::PKCS7_set_type(p7.as_ptr(), Nid::PKCS7_SIGNED.as_raw()))
+            .context("PKCS7_set_type")?;
         cvt(ffi::PKCS7_add_certificate(p7.as_ptr(), sign_cert.as_ptr()))
             .context("PKCS7_add_certificate sign")?;
         cvt(ffi::PKCS7_add_certificate(p7.as_ptr(), enc_cert.as_ptr()))
             .context("PKCS7_add_certificate enc")?;
-        cvt(ffi::PKCS7_content_new(p7.as_ptr(), Nid::PKCS7_DATA.as_raw()))
-            .context("PKCS7_content_new")?;
+        cvt(ffi::PKCS7_content_new(
+            p7.as_ptr(),
+            Nid::PKCS7_DATA.as_raw(),
+        ))
+        .context("PKCS7_content_new")?;
         pkcs7_finalize_content(p7.as_ptr(), Some(skf_content))
             .context("finalize GM inner SignedData content")?;
         p7.to_der().context("encode GM inner SignedData DER")
@@ -234,15 +231,15 @@ fn build_degenerate_certificate_der(cert: &X509Ref) -> Result<Vec<u8>> {
         ffi::init();
         let p7 = cvt_p(ffi::PKCS7_new()).context("PKCS7_new")?;
         let p7 = Pkcs7::from_ptr(p7);
-        cvt(ffi::PKCS7_set_type(
-            p7.as_ptr(),
-            Nid::PKCS7_SIGNED.as_raw(),
-        ))
-        .context("PKCS7_set_type")?;
+        cvt(ffi::PKCS7_set_type(p7.as_ptr(), Nid::PKCS7_SIGNED.as_raw()))
+            .context("PKCS7_set_type")?;
         cvt(ffi::PKCS7_add_certificate(p7.as_ptr(), cert.as_ptr()))
             .context("PKCS7_add_certificate")?;
-        cvt(ffi::PKCS7_content_new(p7.as_ptr(), Nid::PKCS7_DATA.as_raw()))
-            .context("PKCS7_content_new")?;
+        cvt(ffi::PKCS7_content_new(
+            p7.as_ptr(),
+            Nid::PKCS7_DATA.as_raw(),
+        ))
+        .context("PKCS7_content_new")?;
         pkcs7_finalize_content(p7.as_ptr(), None).context("finalize degenerate PKCS7")?;
         p7.to_der().context("encode degenerate cert PKCS7")
     }
@@ -253,16 +250,11 @@ fn rsa_encrypt_recipient_stack(wrapper: &X509Ref, ca_cert: &X509Ref) -> Result<S
     let mut recipients = Stack::new().context("recipients stack")?;
     let mut n = 0usize;
     for cert in [wrapper, ca_cert] {
-        if !cert
-            .public_key()
-            .map(|k| k.rsa().is_ok())
-            .unwrap_or(false)
-        {
+        if !cert.public_key().map(|k| k.rsa().is_ok()).unwrap_or(false) {
             continue;
         }
-        let owned =
-            X509::from_der(&cert.to_der().context("encode cert for recipient stack")?)
-                .context("clone RSA recipient cert")?;
+        let owned = X509::from_der(&cert.to_der().context("encode cert for recipient stack")?)
+            .context("clone RSA recipient cert")?;
         recipients.push(owned).context("push RSA recipient")?;
         n += 1;
     }
@@ -400,7 +392,8 @@ unsafe fn new_signed_data_with_signer(
     let p7 = Pkcs7::from_ptr(p7);
 
     cvt(ffi::PKCS7_set_type(p7.as_ptr(), Nid::PKCS7_SIGNED.as_raw())).context("PKCS7_set_type")?;
-    cvt(ffi::PKCS7_add_certificate(p7.as_ptr(), ca_cert.as_ptr())).context("PKCS7_add_certificate")?;
+    cvt(ffi::PKCS7_add_certificate(p7.as_ptr(), ca_cert.as_ptr()))
+        .context("PKCS7_add_certificate")?;
     let si = ffi::PKCS7_add_signature(
         p7.as_ptr(),
         ca_cert.as_ptr(),
@@ -410,7 +403,11 @@ unsafe fn new_signed_data_with_signer(
     if si.is_null() {
         return Err(anyhow!("PKCS7_add_signature returned null"));
     }
-    cvt(ffi::PKCS7_content_new(p7.as_ptr(), Nid::PKCS7_DATA.as_raw())).context("PKCS7_content_new")?;
+    cvt(ffi::PKCS7_content_new(
+        p7.as_ptr(),
+        Nid::PKCS7_DATA.as_raw(),
+    ))
+    .context("PKCS7_content_new")?;
     Ok((p7, si))
 }
 
@@ -420,11 +417,7 @@ unsafe fn pkcs7_finalize_content(p7: *mut ffi::PKCS7, content: Option<&[u8]>) ->
     let mut err = None;
     if let Some(data) = content {
         let want = i32::try_from(data.len()).unwrap_or(i32::MAX);
-        match cvt(ffi::BIO_write(
-            bio,
-            data.as_ptr() as *const _,
-            want,
-        )) {
+        match cvt(ffi::BIO_write(bio, data.as_ptr() as *const _, want)) {
             Ok(wrote) if wrote == want => {}
             Ok(wrote) => {
                 err = Some(anyhow!("BIO_write: wrote {wrote} bytes, expected {want}"));
@@ -477,16 +470,21 @@ fn ensure_scep_oids_registered() {
             (OID_PKI_STATUS, "scepPkiStatus", "SCEP pkiStatus"),
             (OID_FAIL_INFO, "scepFailInfo", "SCEP failInfo"),
             (OID_SENDER_NONCE, "scepSenderNonce", "SCEP senderNonce"),
-            (OID_RECIPIENT_NONCE, "scepRecipientNonce", "SCEP recipientNonce"),
-            (OID_TRANSACTION_ID, "scepTransactionID", "SCEP transactionID"),
+            (
+                OID_RECIPIENT_NONCE,
+                "scepRecipientNonce",
+                "SCEP recipientNonce",
+            ),
+            (
+                OID_TRANSACTION_ID,
+                "scepTransactionID",
+                "SCEP transactionID",
+            ),
             (OID_FAIL_INFO_TEXT, "scepFailInfoText", "SCEP failInfoText"),
         ];
         for (oid, sn, ln) in oids {
-            let (c_oid, c_sn, c_ln) = match (
-                CString::new(oid),
-                CString::new(sn),
-                CString::new(ln),
-            ) {
+            let (c_oid, c_sn, c_ln) = match (CString::new(oid), CString::new(sn), CString::new(ln))
+            {
                 (Ok(o), Ok(s), Ok(l)) => (o, s, l),
                 _ => continue,
             };
@@ -562,7 +560,8 @@ fn add_printable_attr(si: *mut ffi::PKCS7_SIGNER_INFO, oid: &str, value: &str) -
 fn add_octet_attr(si: *mut ffi::PKCS7_SIGNER_INFO, oid: &str, value: &[u8]) -> Result<()> {
     let nid = oid_nid(oid)?;
     unsafe {
-        let octet = cvt_p(ffi::ASN1_OCTET_STRING_new()).with_context(|| format!("octet attr {oid}"))?;
+        let octet =
+            cvt_p(ffi::ASN1_OCTET_STRING_new()).with_context(|| format!("octet attr {oid}"))?;
         if let Err(e) = cvt(ffi::ASN1_OCTET_STRING_set(
             octet,
             value.as_ptr() as *const _,

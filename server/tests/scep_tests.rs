@@ -3,8 +3,8 @@
 //! OpenSSL 3.x 下 DES/3DES 在 **legacy provider** 中；Debian bookworm 等需安装
 //! `openssl-provider-legacy`，否则部分 Envelop 算法测试会失败。
 
-use crypto_offload_server::cryptooffload::v1::{KeyFormat, KeyKind, KeyLifetime};
 use crypto_offload_server::crypto_scep;
+use crypto_offload_server::cryptooffload::v1::{KeyFormat, KeyKind, KeyLifetime};
 use crypto_offload_server::key_store::KeyStore;
 use crypto_offload_server::openssl_init;
 use crypto_offload_server::test_support::{
@@ -161,13 +161,9 @@ fn scep_build_pending_certrep() {
     let (ca_id, _ca_der) = import_ca(&store, "scep-ca-pending");
 
     let access = store.access_key(&ca_id).expect("access");
-    let certrep = crypto_scep::build_pending_certrep(
-        access,
-        "tx-pending-789",
-        &[5u8, 6, 7, 8],
-        &[],
-    )
-    .expect("build pending certrep");
+    let certrep =
+        crypto_scep::build_pending_certrep(access, "tx-pending-789", &[5u8, 6, 7, 8], &[])
+            .expect("build pending certrep");
     assert!(!certrep.is_empty());
 }
 
@@ -282,11 +278,7 @@ fn scep_build_success_certrep_extended_envelope_ciphers() {
     let (_wrapper_pem, wrapper_der) = generate_rsa2048_der_cert().expect("wrapper");
     let (_issued_pem, issued_der) = generate_rsa2048_der_cert().expect("issued");
 
-    for cipher in [
-        ENVELOPE_AES128_GCM,
-        ENVELOPE_AES256_GCM,
-        ENVELOPE_DES3_CBC,
-    ] {
+    for cipher in [ENVELOPE_AES128_GCM, ENVELOPE_AES256_GCM, ENVELOPE_DES3_CBC] {
         let certrep = build_success_certrep_with_cipher(
             &store,
             &ca_id,
@@ -429,10 +421,9 @@ fn scep_password_envelope_roundtrip() {
         openssl::symm::Cipher::aes_128_cbc(),
     )
     .expect("encrypt password envelope");
-    let out = crypto_offload_server::scep_password_envelope::decrypt_envelope_password(
-        &env, password,
-    )
-    .expect("decrypt password envelope");
+    let out =
+        crypto_offload_server::scep_password_envelope::decrypt_envelope_password(&env, password)
+            .expect("decrypt password envelope");
     assert_eq!(out, plain);
 }
 
@@ -446,8 +437,8 @@ fn scep_parse_request_password_pkio() {
     let (pkio_der, expected_plain, expected_wrapper) =
         generate_scep_pkio_password(password, csr).expect("password PKIO fixture");
     let access = store.access_key(&ca_id).expect("access");
-    let (plain, wrapper) = crypto_scep::parse_request(&pkio_der, access, Some(password))
-        .expect("parse password PKIO");
+    let (plain, wrapper) =
+        crypto_scep::parse_request(&pkio_der, access, Some(password)).expect("parse password PKIO");
     assert_eq!(plain, expected_plain);
     assert_eq!(wrapper, expected_wrapper);
 }

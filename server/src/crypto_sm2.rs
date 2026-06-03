@@ -5,6 +5,7 @@
 use std::ptr;
 
 use anyhow::{bail, Context, Result};
+use foreign_types::{ForeignType, ForeignTypeRef};
 use openssl::asn1::Asn1Time;
 use openssl::hash::MessageDigest;
 use openssl::pkey::{PKey, PKeyRef, Private, Public};

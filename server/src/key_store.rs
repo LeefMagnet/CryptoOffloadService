@@ -49,15 +49,17 @@ pub(crate) enum KeyMaterial {
 impl KeyMaterial {
     fn family(&self) -> KeyFamily {
         match self {
-            KeyMaterial::Private { key, .. } | KeyMaterial::Public { key, .. } => {
-                pkey_util::family(key)
-            }
+            KeyMaterial::Private { key, .. } => pkey_util::family(key),
+            KeyMaterial::Public { key, .. } => pkey_util::family(key),
         }
     }
 
     fn algorithm_and_bits(&self) -> (String, i32) {
         match self {
-            KeyMaterial::Private { key, .. } | KeyMaterial::Public { key, .. } => {
+            KeyMaterial::Private { key, .. } => {
+                (pkey_util::algorithm_name(key), key.bits() as i32)
+            }
+            KeyMaterial::Public { key, .. } => {
                 (pkey_util::algorithm_name(key), key.bits() as i32)
             }
         }

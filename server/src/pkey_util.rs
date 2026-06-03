@@ -3,8 +3,9 @@
 use std::ffi::CStr;
 
 use anyhow::{bail, Result};
+use foreign_types::ForeignTypeRef;
 use openssl::nid::Nid;
-use openssl::pkey::{HasPublic, Id, PKeyRef};
+use openssl::pkey::{HasPublic, Id, PKey, PKeyRef};
 use openssl_sys as ffi;
 
 use crate::pb::{HashAlgorithm, SignAlgorithm};
@@ -49,7 +50,11 @@ pub fn is_sm2(key: &PKeyRef<impl HasPublic>) -> bool {
         .is_some_and(|nid| nid == Nid::SM2)
 }
 
-pub fn family(key: &PKeyRef<impl HasPublic>) -> KeyFamily {
+pub fn family<T: HasPublic>(key: &PKey<T>) -> KeyFamily {
+    family_ref(key)
+}
+
+pub fn family_ref(key: &PKeyRef<impl HasPublic>) -> KeyFamily {
     if is_sm2(key) {
         return KeyFamily::Sm2;
     }
@@ -68,13 +73,17 @@ pub fn family(key: &PKeyRef<impl HasPublic>) -> KeyFamily {
 }
 
 /// ImportKey 元数据中的 `algorithm` 字段。
-pub fn algorithm_name(key: &PKeyRef<impl HasPublic>) -> String {
+pub fn algorithm_name<T: HasPublic>(key: &PKey<T>) -> String {
+    algorithm_name_ref(key)
+}
+
+pub fn algorithm_name_ref(key: &PKeyRef<impl HasPublic>) -> String {
     if is_sm2(key) {
         return "SM2".to_string();
     }
     if let Some(name) = openssl_type_name(key) {
         if !name.is_empty() {
-            return name;
+            return normalize_algorithm_display(&name);
         }
     }
     match key.id() {
@@ -83,6 +92,16 @@ pub fn algorithm_name(key: &PKeyRef<impl HasPublic>) -> String {
         Id::SM2 => "SM2".to_string(),
         Id::ED25519 => "Ed25519".to_string(),
         other => format!("{other:?}"),
+    }
+}
+
+fn normalize_algorithm_display(openssl_name: &str) -> String {
+    match openssl_name.to_ascii_uppercase().as_str() {
+        "ED25519" => "Ed25519".to_string(),
+        "RSA" => "RSA".to_string(),
+        "EC" => "EC".to_string(),
+        "SM2" => "SM2".to_string(),
+        other => openssl_name.to_string(),
     }
 }
 

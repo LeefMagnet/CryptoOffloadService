@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 从 run_suite 报告生成 1/2/3 核全模式 QPS 汇总表（格式对齐 benchmark_client_grid.txt）
+# 从 run_suite 报告生成 1/2/3 核热路径 QPS 汇总表（不含 KeyService 低频 RPC）
 #
 # 用法:
 #   bash scripts/benchmark/summarize_cpu_reports.sh
@@ -30,7 +30,6 @@ MODES=(
   scep-certrep-success scep-certrep-failure scep-certrep-pending
   scep-parse-request scep-certrep-verify scep-parse-build-success
   cmp-parse cmp-verify cmp-parse-verify cmp-build
-  import-key
 )
 
 parse_report() {
@@ -137,9 +136,10 @@ done
 
   for m in "${MODES[@]}"; do
     printf "%-22s" "${m}"
-    local sum_qps=0
-    local cnt=0
-    local first_cpus=1
+    sum_qps=0
+    sum_qps_per_cpu=0
+    cnt=0
+    cnt_per_cpu=0
     for f in "${REPORTS[@]}"; do
       base="$(basename "${f}" .txt)"
       p="${TMP}/${base}.parsed"
@@ -148,7 +148,6 @@ done
         continue
       fi
       cpus="$(grep '^CPUS:' "${p}" | cut -d: -f2)"
-      first_cpus="${cpus}"
       row="$(grep "^MODE:${m}:" "${p}" || true)"
       if [[ -z "${row}" ]]; then
         printf " | %9s" "—"
@@ -162,16 +161,20 @@ done
       printf " | %9.0f" "${qps}"
       sum_qps=$((sum_qps + $(printf "%.0f" "${qps}")))
       cnt=$((cnt + 1))
+      if [[ "${cpus}" -gt 0 ]]; then
+        sum_qps_per_cpu=$((sum_qps_per_cpu + $(printf "%.0f" "$(echo "scale=0; ${qps} / ${cpus}" | bc 2>/dev/null || echo 0)")))
+        cnt_per_cpu=$((cnt_per_cpu + 1))
+      fi
     done
-    if [[ ${cnt} -ge 1 ]]; then
-      avg_per_cpu="$(echo "scale=0; ${sum_qps} / ${cnt}" | bc 2>/dev/null || echo "—")"
+    if [[ ${cnt_per_cpu} -ge 1 ]]; then
+      avg_per_cpu="$(echo "scale=0; ${sum_qps_per_cpu} / ${cnt_per_cpu}" | bc 2>/dev/null || echo "—")"
       printf " | %8s\n" "${avg_per_cpu}"
     else
       printf " | %8s\n" "—"
     fi
   done
   echo
-  echo "¹ QPS/核 列 = 各核 QPS 的算术平均（非单一跑次），便于横向对比模式强度。"
+  echo "¹ QPS/核 列 = 各跑次 (QPS ÷ server_cpus) 的算术平均，便于横向对比模式强度。"
   echo
 
   echo "=== 分核明细（QPS | P50 µs | P99 µs）==="

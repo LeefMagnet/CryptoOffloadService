@@ -6,14 +6,11 @@ use std::ptr;
 
 use anyhow::{bail, Context, Result};
 use foreign_types::{ForeignType, ForeignTypeRef};
-use openssl::asn1::Asn1Time;
-use openssl::hash::MessageDigest;
 use openssl::pkey::{PKey, PKeyRef, Private, Public};
-use openssl::x509::{X509Builder, X509NameBuilder};
 use openssl_sys::{
     EVP_DigestSign, EVP_DigestSignInit, EVP_DigestVerify, EVP_DigestVerifyInit, EVP_MD_CTX_free,
-    EVP_MD_CTX_new, EVP_PKEY_CTX_free, EVP_PKEY_CTX_new, EVP_PKEY_CTX_new_id,
-    EVP_PKEY_CTX_set_ec_paramgen_curve_nid, EVP_PKEY_keygen, EVP_PKEY_EC, EVP_sm3, NID_sm2,
+    EVP_MD_CTX_new, EVP_PKEY_CTX_free, EVP_PKEY_CTX_new, EVP_PKEY_CTX_new_id, EVP_PKEY_keygen,
+    EVP_PKEY_EC, EVP_sm3,
 };
 
 /// 国标默认 SM2 签名者 ID（与 PkiSdk `Configure::GetGmUserId` 一致）。
@@ -21,8 +18,11 @@ pub const GM_DEFAULT_USER_ID: &[u8] = b"1234567812345678";
 
 #[link(name = "crypto")]
 extern "C" {
-    fn EVP_MD_CTX_set_pkey_ctx(ctx: *mut openssl_sys::EVP_MD_CTX, pctx: *mut openssl_sys::EVP_PKEY_CTX) -> std::os::raw::c_int;
     fn EVP_PKEY_keygen_init(ctx: *mut openssl_sys::EVP_PKEY_CTX) -> std::os::raw::c_int;
+    fn EVP_PKEY_CTX_set_group_name(
+        ctx: *mut openssl_sys::EVP_PKEY_CTX,
+        name: *const std::os::raw::c_char,
+    ) -> std::os::raw::c_int;
     fn EVP_PKEY_CTX_set1_id(
         ctx: *mut openssl_sys::EVP_PKEY_CTX,
         id: *const std::os::raw::c_void,
@@ -30,27 +30,16 @@ extern "C" {
     ) -> std::os::raw::c_int;
 }
 
-/// 生成 SM2 密钥对 + 自签证书 PEM（`EVP_PKEY_keygen` + SM3 签证书）。
+/// 生成 SM2 私钥 PEM；证书 PEM 为空。
+///
+/// OpenSSL 3.x 的 `X509_sign(SM3)` 对 SM2 需 `EVP_PKEY_CTX_set1_id`，`X509Builder::sign` 未设置会触发
+/// `OSSL_PARAM_set_octet_string: null parameter`。测试/压测 ImportKey 可不附带证书（从私钥推断 SM2）。
 pub fn generate_keypair_pem() -> Result<(Vec<u8>, Vec<u8>)> {
-    let pkey = generate_private_key()?;
-    let priv_pem = pkey.private_key_to_pem_pkcs8()?;
-
-    let mut name = X509NameBuilder::new()?;
-    name.append_entry_by_text("CN", "sm2-test")?;
-    let name = name.build();
-
-    let mut builder = X509Builder::new()?;
-    builder.set_version(2)?;
-    builder.set_subject_name(&name)?;
-    builder.set_issuer_name(&name)?;
-    builder.set_pubkey(&pkey)?;
-    let not_before = Asn1Time::days_from_now(0)?;
-    let not_after = Asn1Time::days_from_now(365)?;
-    builder.set_not_before(&not_before)?;
-    builder.set_not_after(&not_after)?;
-    builder.sign(&pkey, MessageDigest::sm3())?;
-    let cert_pem = builder.build().to_pem()?;
-    Ok((priv_pem, cert_pem))
+    let pkey = generate_private_key().context("sm2 keygen")?;
+    let priv_pem = pkey
+        .private_key_to_pem_pkcs8()
+        .context("sm2 private pem")?;
+    Ok((priv_pem, Vec::new()))
 }
 
 /// 测试与 benchmark 沿用名称。
@@ -68,8 +57,9 @@ fn generate_private_key() -> Result<PKey<Private>> {
         if EVP_PKEY_keygen_init(ctx) <= 0 {
             bail!("EVP_PKEY_keygen_init failed");
         }
-        if EVP_PKEY_CTX_set_ec_paramgen_curve_nid(ctx, NID_sm2) <= 0 {
-            bail!("EVP_PKEY_CTX_set_ec_paramgen_curve_nid(SM2) failed");
+        // OpenSSL 3.x：set_ec_paramgen_curve_nid(SM2) 会触发 OSSL_PARAM null；与 CLI 一致用 group name。
+        if EVP_PKEY_CTX_set_group_name(ctx, c"SM2".as_ptr()) <= 0 {
+            bail!("EVP_PKEY_CTX_set_group_name(SM2) failed");
         }
         let mut raw: *mut openssl_sys::EVP_PKEY = ptr::null_mut();
         if EVP_PKEY_keygen(ctx, &mut raw) <= 0 {
@@ -102,22 +92,22 @@ pub fn sm2_sign_with_user_id(
         }
         let mctx_guard = MdCtxGuard(mctx);
 
-        let pctx = EVP_PKEY_CTX_new(private.as_ptr(), ptr::null_mut());
-        if pctx.is_null() {
-            bail!("EVP_PKEY_CTX_new failed");
-        }
-        let pctx_guard = PkeyCtxGuard(pctx);
-
-        if EVP_PKEY_CTX_set1_id(pctx, user_id.as_ptr().cast(), user_id.len() as i32) <= 0 {
-            bail!("EVP_PKEY_CTX_set1_id failed");
-        }
-        if EVP_MD_CTX_set_pkey_ctx(mctx, pctx) <= 0 {
-            bail!("EVP_MD_CTX_set_pkey_ctx failed");
-        }
-        if EVP_DigestSignInit(mctx, ptr::null_mut(), EVP_sm3(), ptr::null_mut(), private.as_ptr())
-            <= 0
+        let mut pctx: *mut openssl_sys::EVP_PKEY_CTX = ptr::null_mut();
+        if EVP_DigestSignInit(
+            mctx,
+            &mut pctx,
+            EVP_sm3(),
+            ptr::null_mut(),
+            private.as_ptr(),
+        ) <= 0
         {
             bail!("EVP_DigestSignInit(SM3) failed");
+        }
+        if pctx.is_null() {
+            bail!("EVP_DigestSignInit returned null pctx");
+        }
+        if EVP_PKEY_CTX_set1_id(pctx, user_id.as_ptr().cast(), user_id.len() as i32) <= 0 {
+            bail!("EVP_PKEY_CTX_set1_id failed");
         }
 
         let mut sig_len: usize = 0;
@@ -153,28 +143,23 @@ pub fn sm2_verify_with_user_id(
         }
         let mctx_guard = MdCtxGuard(mctx);
 
-        let pctx = EVP_PKEY_CTX_new(public.as_ptr(), ptr::null_mut());
-        if pctx.is_null() {
-            bail!("EVP_PKEY_CTX_new failed");
-        }
-        let pctx_guard = PkeyCtxGuard(pctx);
-
-        if EVP_PKEY_CTX_set1_id(pctx, user_id.as_ptr().cast(), user_id.len() as i32) <= 0 {
-            bail!("EVP_PKEY_CTX_set1_id failed");
-        }
-        if EVP_MD_CTX_set_pkey_ctx(mctx, pctx) <= 0 {
-            bail!("EVP_MD_CTX_set_pkey_ctx failed");
-        }
-        // 与 PkiSdk 一致：验签 init 时 md 传 null
+        let mut pctx: *mut openssl_sys::EVP_PKEY_CTX = ptr::null_mut();
+        // 与 PkiSdk 一致：验签 init 时 md 传 null，再从 pctx 设置 SM2 id
         if EVP_DigestVerifyInit(
             mctx,
-            ptr::null_mut(),
+            &mut pctx,
             ptr::null(),
             ptr::null_mut(),
             public.as_ptr(),
         ) <= 0
         {
             bail!("EVP_DigestVerifyInit failed");
+        }
+        if pctx.is_null() {
+            bail!("EVP_DigestVerifyInit returned null pctx");
+        }
+        if EVP_PKEY_CTX_set1_id(pctx, user_id.as_ptr().cast(), user_id.len() as i32) <= 0 {
+            bail!("EVP_PKEY_CTX_set1_id failed");
         }
 
         let ok = EVP_DigestVerify(

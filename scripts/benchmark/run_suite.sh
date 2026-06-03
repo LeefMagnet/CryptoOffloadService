@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# 全模式压测套件：Sign/Verify/CMS/SCEP/国密 全部 mode。
+# 全模式压测套件：Sign/Verify/CMS/SCEP/CMP 等热路径 mode。
+# 不含 KeyService 低频操作（ImportKey / DeleteKey / GetKeyInfo / ListKeys 等）。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
+# shellcheck source=scripts/benchmark/env_openssl.sh
+[[ -d /opt/openssl35x/lib ]] && source "${ROOT}/scripts/benchmark/env_openssl.sh" 35
 # shellcheck source=scripts/benchmark/bench_defaults.sh
 source "${ROOT}/scripts/benchmark/bench_defaults.sh"
 
@@ -68,7 +71,6 @@ run_mode() {
     scep-certrep-success scep-certrep-failure scep-certrep-pending
     scep-parse-request scep-certrep-verify scep-parse-build-success
     cmp-parse cmp-verify cmp-parse-verify cmp-build
-    import-key
   )
   for mode in "${MODES[@]}"; do
     run_mode "${mode}"

@@ -153,9 +153,15 @@ python scripts/benchmark/bench_python.py --mode sign --clients 8
 
 ## 2. 压测模式说明
 
+**不在 `run_suite.sh` 中的操作**（启动/轮换级低频，非热路径）：
+
+| RPC | 说明 |
+|-----|------|
+| `ImportKey` | 启动或密钥轮换时调用；压测客户端仅在各 mode **预热前** import 一次（见输出 `key_import_ms`，**不计入 QPS**） |
+| `DeleteKey` / `GetKeyInfo` / `ListKeys` | 管理类查询，不做吞吐压测 |
+
 | mode | 测量内容 | 密钥 ImportKey |
 |------|----------|----------------|
-| `import-key` | 仅 ImportKey QPS | 每次请求都 import |
 | `sign` | Sign QPS | 压测前 import 一次，**不计入** QPS |
 | `verify` | Verify QPS | 压测前 import 公钥 + 预生成签名 |
 | `sign-verify` | 签名+验签往返 | 各 import 一次 |
@@ -209,7 +215,6 @@ python scripts/benchmark/bench_python.py --mode sign --clients 8
 | scep-certrep-failure | 3086 | 1189 | 2818 | 无 Envelop，比 success 快 |
 | scep-certrep-verify | 8644 | 648 | 1350 | CMS 验签 CertRep（轻量） |
 | scep-parse-build-success | 1536 | 3786 | 6441 | Parse → Build 往返 |
-| import-key | 36 | — | — | 含 PEM 解析，非热路径 |
 
 > 16 核未绑核（`run_wsl_suite.sh`）Sign 约 **4326 QPS**；3 核约为 **79%** 线性比例，RSA 签名与核数大致成正比。
 

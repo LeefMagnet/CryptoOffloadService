@@ -1,4 +1,6 @@
-//! gRPC 压测客户端：测量 Sign/Verify/CMS/SCEP/ImportKey 吞吐与延迟。
+//! gRPC 压测客户端：测量 Sign/Verify/CMS/SCEP/CMP 等热路径吞吐与延迟。
+//! 密钥 ImportKey 仅在各 mode 启动时一次性完成（计入 key_import_ms，不计入 QPS）。
+//! KeyService 的导入/删除/查询等低频 RPC 不在默认压测范围内。
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
@@ -39,7 +41,6 @@ const ENVELOPE_AES256_CBC: i32 = 2;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum BenchMode {
-    ImportKey,
     Sign,
     Verify,
     SignVerify,
@@ -437,7 +438,11 @@ async fn prepare_keys(channel: &Channel, args: &Args, payload: &[u8]) -> Result<
     // SM2（可选）
     let (sm2_private_key_id, sm2_public_key_id) = match generate_sm2_pem() {
         Ok((sm2_pem, sm2_cert_pem)) => {
-            let sm2_cert_der = X509::from_pem(&sm2_cert_pem)?.to_der()?;
+            let sm2_cert_der = if sm2_cert_pem.is_empty() {
+                Vec::new()
+            } else {
+                X509::from_pem(&sm2_cert_pem)?.to_der()?
+            };
             let sm2_priv = import_private(
                 &mut key_client,
                 sm2_pem.clone(),
@@ -642,18 +647,6 @@ fn extract_public_pem(private_pem: &[u8]) -> Result<Vec<u8>> {
 
 async fn run_one(channel: &Channel, mode: BenchMode, keys: &BenchKeys) -> Result<()> {
     match mode {
-        BenchMode::ImportKey => {
-            let (pem, _) = generate_rsa2048_pem()?;
-            KeyServiceClient::new(channel.clone())
-                .import_key(ImportKeyRequest {
-                    kind: KeyKind::Private as i32,
-                    lifetime: KeyLifetime::Temporary as i32,
-                    format: KeyFormat::Pem as i32,
-                    key_data: pem,
-                    ..Default::default()
-                })
-                .await?;
-        }
         BenchMode::Sign => {
             sign_rsa_pkcs1(channel, keys).await?;
         }

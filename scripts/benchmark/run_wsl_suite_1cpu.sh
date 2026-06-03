@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
+# shellcheck source=scripts/benchmark/env_openssl.sh
+[[ -d /opt/openssl35x/lib ]] && source "${ROOT}/scripts/benchmark/env_openssl.sh" 35
 # shellcheck source=scripts/benchmark/bench_defaults.sh
 source "${ROOT}/scripts/benchmark/bench_defaults.sh"
 

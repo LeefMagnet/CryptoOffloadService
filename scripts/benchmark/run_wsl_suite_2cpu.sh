@@ -4,8 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
-SERVER_CPUSET="${SERVER_CPUSET:-0-2}"
-SERVER_CPUS="${SERVER_CPUS:-3}"
+SERVER_CPUSET="${SERVER_CPUSET:-0-1}"
+SERVER_CPUS="${SERVER_CPUS:-2}"
 
 pkill -f crypto-offload-server 2>/dev/null || true
 sleep 1
@@ -29,7 +29,7 @@ if [[ -r "/proc/${SERVER_PID}/status" ]]; then
 fi
 
 export SERVER_PROFILE="wsl-cpuset-${SERVER_CPUSET},server_cpus=${SERVER_CPUS}"
-export CLIENTS="${CLIENTS:-6}"
+export CLIENTS="${CLIENTS:-4}"
 export TOTAL="${TOTAL:-5000}"
 export WARMUP="${WARMUP:-2}"
 export OUT="${OUT:-benchmark_report_3cpu.txt}"

@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
+# shellcheck source=scripts/benchmark/bench_defaults.sh
+source "${ROOT}/scripts/benchmark/bench_defaults.sh"
 
 SERVER_CPUSET="${SERVER_CPUSET:-0-2}"
 SERVER_CPUS="${SERVER_CPUS:-3}"
@@ -12,6 +14,10 @@ sleep 1
 
 taskset -c "${SERVER_CPUSET}" \
   ./target/release/crypto-offload-server --listen 127.0.0.1:50051 \
+  --worker-threads "${SERVER_CPUS}" \
+  --crypto-blocking-threads "${SERVER_CPUS}" \
+  --crypto-max-inflight "${SERVER_CPUS}" \
+  --crypto-overload-watermark "${SERVER_CPUS}" \
   > /tmp/cos-bench-server-3cpu.log 2>&1 &
 SERVER_PID=$!
 trap 'kill "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true' EXIT
@@ -29,7 +35,7 @@ if [[ -r "/proc/${SERVER_PID}/status" ]]; then
 fi
 
 export SERVER_PROFILE="wsl-cpuset-${SERVER_CPUSET},server_cpus=${SERVER_CPUS}"
-export CLIENTS="${CLIENTS:-6}"
+export CLIENTS="${CLIENTS:-$(bench_default_clients "${SERVER_CPUS}")}"
 export TOTAL="${TOTAL:-5000}"
 export WARMUP="${WARMUP:-2}"
 export OUT="${OUT:-benchmark_report_3cpu.txt}"

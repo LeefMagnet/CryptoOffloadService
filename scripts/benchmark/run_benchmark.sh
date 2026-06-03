@@ -4,10 +4,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
+# shellcheck source=scripts/benchmark/bench_defaults.sh
+source "${ROOT}/scripts/benchmark/bench_defaults.sh"
 
 ADDR="${ADDR:-127.0.0.1:50051}"
 MODE="${MODE:-sign}"
-CLIENTS="${CLIENTS:-8}"
+SERVER_CPUS="${SERVER_CPUS:-0}"
+CLIENTS="${CLIENTS:-$(bench_default_clients "${SERVER_CPUS}")}"
 TOTAL="${TOTAL:-20000}"
 WARMUP="${WARMUP:-3}"
 PAYLOAD="${PAYLOAD:-256}"

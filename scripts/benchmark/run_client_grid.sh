@@ -7,6 +7,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
+# shellcheck source=scripts/benchmark/bench_defaults.sh
+source "${ROOT}/scripts/benchmark/bench_defaults.sh"
 
 export PATH="${HOME}/.cargo/bin:/usr/bin:/bin:${PATH:-}}"
 
@@ -16,8 +18,8 @@ TOTAL="${TOTAL:-5000}"
 WARMUP="${WARMUP:-2}"
 PAYLOAD="${PAYLOAD:-256}"
 OUT="${OUT:-benchmark_client_grid.txt}"
-# 格式: "cpus:cpuset:clients,clients;..."
-SERVER_GRID="${SERVER_GRID:-2:0-1:4,6,8;3:0-2:6,8,12}"
+# 格式: "cpus:cpuset:clients,clients;..."（默认以 1×核数 为中心扫描）
+SERVER_GRID="${SERVER_GRID:-2:0-1:2,3,4;3:0-2:3,4,6}"
 
 BIN="$ROOT/target/release/crypto-offload-benchmark"
 SERVER_BIN="$ROOT/target/release/crypto-offload-server"
@@ -42,6 +44,7 @@ start_server() {
     --worker-threads "${cpus}" \
     --crypto-blocking-threads "$((cpus * 2))" \
     --crypto-max-inflight "${cpus}" \
+    --crypto-overload-watermark "${cpus}" \
     > /tmp/cos-grid-server.log 2>&1 &
   SERVER_PID=$!
   sleep 2

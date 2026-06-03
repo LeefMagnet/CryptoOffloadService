@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
+# shellcheck source=scripts/benchmark/bench_defaults.sh
+source "${ROOT}/scripts/benchmark/bench_defaults.sh"
 
 pkill -f crypto-offload-server 2>/dev/null || true
 sleep 1
@@ -18,9 +20,10 @@ if ! kill -0 "$SERVER_PID" 2>/dev/null; then
   exit 1
 fi
 
-CPU="$(nproc)"
+CPU="$(bench_logical_cpus)"
+export SERVER_CPUS="${SERVER_CPUS:-${CPU}}"
 export SERVER_PROFILE="wsl-unbound,cpu_logical=${CPU}"
-export CLIENTS="${CLIENTS:-4}"
+export CLIENTS="${CLIENTS:-$(bench_default_clients "${SERVER_CPUS}")}"
 export TOTAL="${TOTAL:-5000}"
 export WARMUP="${WARMUP:-2}"
 export OUT="${OUT:-benchmark_report.txt}"

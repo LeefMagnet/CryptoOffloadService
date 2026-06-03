@@ -4,11 +4,14 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
+# shellcheck source=scripts/benchmark/bench_defaults.sh
+source "${ROOT}/scripts/benchmark/bench_defaults.sh"
 
 export PATH="${HOME}/.cargo/bin:/usr/bin:/bin:${PATH:-}}"
 
 ADDR="${ADDR:-127.0.0.1:50051}"
-CLIENTS="${CLIENTS:-4}"
+SERVER_CPUS="${SERVER_CPUS:-0}"
+CLIENTS="${CLIENTS:-$(bench_default_clients "${SERVER_CPUS}")}"
 TOTAL="${TOTAL:-5000}"
 WARMUP="${WARMUP:-2}"
 PAYLOAD="${PAYLOAD:-256}"
@@ -64,6 +67,7 @@ run_mode() {
     cms-build cms-parse cms-verify cms-build-parse
     scep-certrep-success scep-certrep-failure scep-certrep-pending
     scep-parse-request scep-certrep-verify scep-parse-build-success
+    cmp-parse cmp-verify cmp-parse-verify cmp-build
     import-key
   )
   for mode in "${MODES[@]}"; do

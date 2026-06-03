@@ -130,7 +130,7 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--address", default="127.0.0.1:50051")
     p.add_argument("--mode", default="sign", choices=["sign"])
-    p.add_argument("--clients", type=int, default=8)
+    p.add_argument("--clients", type=int, default=4, help="建议 = 服务端 CPU / max-inflight（1:1）")
     p.add_argument("--total", type=int, default=5000)
     p.add_argument("--warmup", type=float, default=2.0)
     args = p.parse_args()

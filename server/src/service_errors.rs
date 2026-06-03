@@ -38,6 +38,7 @@ fn is_invalid_argument_crypto(msg: &str) -> bool {
         || m.contains("key not found")
         || m.contains("already consumed")
         || m.contains("too large")
+        || m.contains("cmp_shim_invalid_argument")
 }
 
 fn is_resource_exhausted_crypto(msg: &str) -> bool {

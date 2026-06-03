@@ -24,4 +24,5 @@ build_output.log
 rust_setup.log
 *.pem
 *.der
+!server/testdata/**/*.der
 *.key

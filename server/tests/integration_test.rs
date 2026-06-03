@@ -10,7 +10,8 @@ use crypto_offload_server::cryptooffload::v1::{
     BuildCmpProtectedPkiMessageRequest, BuildCmsRequest, BuildScepFailureCertRepRequest,
     BuildScepPendingCertRepRequest, BuildScepSuccessCertRepRequest, GetKeyInfoRequest,
     HashAlgorithm, ImportKeyRequest, KeyFormat, KeyKind, KeyLifetime, ListKeysRequest,
-    ParseAndVerifyCmpPkiMessageRequest, ParseEnrollPkioRequest, ParseGetCertPkioRequest,
+    ParseAndVerifyCmpPkiMessageRequest, ParseCmpPkiMessageRequest, ParseEnrollPkioRequest,
+    ParseGetCertPkioRequest,
     ParseScepRequestRequest, SignAlgorithm, SignRequest, VerifyCmsRequest, VerifyRequest,
 };
 use crypto_offload_server::run_server;
@@ -941,11 +942,16 @@ async fn grpc_cmp_build_succeeds_or_reports_unsupported() {
         .expect("metadata")
         .key_id;
 
+    const IR_UNPROTECTED: &[u8] = include_bytes!("../testdata/cmp/IR_unprotected.der");
+    let (pki_header_der, pki_body_der) =
+        crypto_offload_server::crypto_cmp::split_pki_message(IR_UNPROTECTED)
+            .expect("split IR_unprotected.der");
+
     let result = cmp_client
         .build_protected_pki_message(BuildCmpProtectedPkiMessageRequest {
-            pki_header_der: vec![0x30, 0x03, 0x02, 0x01, 0x02],
-            pki_body_der: vec![0xa0, 0x00],
-            sign_key_id,
+            pki_header_der,
+            pki_body_der,
+            sign_key_id: sign_key_id.clone(),
             hash_algorithm: HashAlgorithm::HashSha256 as i32,
             sign_algorithm: SignAlgorithm::SignRsaPkcs1V15 as i32,
         })
@@ -953,7 +959,16 @@ async fn grpc_cmp_build_succeeds_or_reports_unsupported() {
 
     match result {
         Ok(resp) => {
-            assert!(!resp.into_inner().pki_message_der.is_empty());
+            let built = resp.into_inner();
+            assert!(!built.pki_message_der.is_empty());
+            let parsed = cmp_client
+                .parse_pki_message(ParseCmpPkiMessageRequest {
+                    pki_message_der: built.pki_message_der,
+                    ..Default::default()
+                })
+                .await
+                .expect("parse built PKIMessage");
+            assert!(parsed.into_inner().body_type >= 0);
         }
         Err(err) => {
             assert_eq!(err.code(), Code::FailedPrecondition);
@@ -1011,7 +1026,7 @@ async fn grpc_cmp_build_invalid_der_reports_invalid_argument_or_unsupported() {
         .build_protected_pki_message(BuildCmpProtectedPkiMessageRequest {
             // 非法 header：INTEGER，不是 PKIHeader DER SEQUENCE
             pki_header_der: vec![0x02, 0x01, 0x01],
-            pki_body_der: vec![0xa0, 0x00],
+            pki_body_der: vec![0x30, 0x00],
             sign_key_id,
             hash_algorithm: HashAlgorithm::HashSha256 as i32,
             sign_algorithm: SignAlgorithm::SignRsaPkcs1V15 as i32,

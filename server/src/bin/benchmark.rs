@@ -20,15 +20,17 @@ pub mod cryptooffload {
     }
 }
 
+use cryptooffload::v1::cmp_service_client::CmpServiceClient;
 use cryptooffload::v1::cms_service_client::CmsServiceClient;
 use cryptooffload::v1::key_service_client::KeyServiceClient;
 use cryptooffload::v1::scep_service_client::ScepServiceClient;
 use cryptooffload::v1::sign_service_client::SignServiceClient;
 use cryptooffload::v1::{
-    BuildCmsRequest, BuildScepFailureCertRepRequest, BuildScepPendingCertRepRequest,
-    BuildScepSuccessCertRepRequest, HashAlgorithm, ImportKeyRequest, KeyFormat, KeyKind,
-    KeyLifetime, ParseCmsRequest, ParseScepRequestRequest, SignAlgorithm, SignRequest,
-    VerifyCmsRequest, VerifyRequest,
+    BuildCmpProtectedPkiMessageRequest, BuildCmsRequest, BuildScepFailureCertRepRequest,
+    BuildScepPendingCertRepRequest, BuildScepSuccessCertRepRequest, HashAlgorithm,
+    ImportKeyRequest, KeyFormat, KeyKind, KeyLifetime, ParseAndVerifyCmpPkiMessageRequest,
+    ParseCmpPkiMessageRequest, ParseCmsRequest, ParseScepRequestRequest, SignAlgorithm,
+    SignRequest, VerifyCmpPkiMessageProtectionRequest, VerifyCmsRequest, VerifyRequest,
 };
 
 const ENVELOPE_UNSPECIFIED: i32 = 0;
@@ -70,6 +72,18 @@ enum BenchMode {
     ScepCertrepVerify,
     /// ParseRequest + BuildSuccessCertRep 组合
     ScepParseBuildSuccess,
+    /// CMP PKIMessage 解析（ParsePkiMessage）
+    #[value(name = "cmp-parse")]
+    CmpParse,
+    /// CMP protection 验签（VerifyPkiMessageProtection）
+    #[value(name = "cmp-verify")]
+    CmpVerify,
+    /// CMP 解析 + 验签（ParseAndVerifyPkiMessage，推荐主路径）
+    #[value(name = "cmp-parse-verify")]
+    CmpParseVerify,
+    /// CMP 构建带 protection 的 PKIMessage（BuildProtectedPkiMessage）
+    #[value(name = "cmp-build")]
+    CmpBuild,
 }
 
 #[derive(Debug, Parser)]
@@ -112,6 +126,12 @@ struct BenchKeys {
     scep_pkio_der: Vec<u8>,
     scep_success_certrep_der: Vec<u8>,
     recipient_nonce: Vec<u8>,
+    cmp_ready: bool,
+    cmp_sign_key_id: String,
+    cmp_verify_key_id: String,
+    cmp_pki_message_der: Vec<u8>,
+    cmp_pki_header_der: Vec<u8>,
+    cmp_pki_body_der: Vec<u8>,
 }
 
 #[tokio::main]
@@ -132,6 +152,12 @@ async fn main() -> Result<()> {
     if requires_sm2(args.mode) && keys.sm2_private_key_id.is_none() {
         anyhow::bail!(
             "mode {:?} requires SM2 support in OpenSSL; unavailable on this host",
+            args.mode
+        );
+    }
+    if requires_cmp(args.mode) && !keys.cmp_ready {
+        anyhow::bail!(
+            "mode {:?} requires CMP offload (OpenSSL 3.x CMP APIs); fixture build failed or server returned FailedPrecondition",
             args.mode
         );
     }
@@ -190,6 +216,9 @@ async fn main() -> Result<()> {
     if !keys.cms_der.is_empty() {
         println!("cms_der_bytes: {}", keys.cms_der.len());
     }
+    if keys.cmp_ready {
+        println!("cmp_pki_message_der_bytes: {}", keys.cmp_pki_message_der.len());
+    }
     println!("elapsed_ms: {:.2}", elapsed.as_secs_f64() * 1000.0);
     println!("qps: {:.2}", qps);
     println!("latency_us: p50={} p95={} p99={}", p50, p95, p99);
@@ -198,6 +227,16 @@ async fn main() -> Result<()> {
 
 fn requires_sm2(mode: BenchMode) -> bool {
     matches!(mode, BenchMode::SignSm2 | BenchMode::SignVerifySm2)
+}
+
+fn requires_cmp(mode: BenchMode) -> bool {
+    matches!(
+        mode,
+        BenchMode::CmpParse
+            | BenchMode::CmpVerify
+            | BenchMode::CmpParseVerify
+            | BenchMode::CmpBuild
+    )
 }
 
 fn print_env_banner(args: &Args) {
@@ -303,6 +342,12 @@ impl BenchKeys {
             scep_pkio_der: self.scep_pkio_der.clone(),
             scep_success_certrep_der: self.scep_success_certrep_der.clone(),
             recipient_nonce: self.recipient_nonce.clone(),
+            cmp_ready: self.cmp_ready,
+            cmp_sign_key_id: self.cmp_sign_key_id.clone(),
+            cmp_verify_key_id: self.cmp_verify_key_id.clone(),
+            cmp_pki_message_der: self.cmp_pki_message_der.clone(),
+            cmp_pki_header_der: self.cmp_pki_header_der.clone(),
+            cmp_pki_body_der: self.cmp_pki_body_der.clone(),
         }
     }
 }
@@ -312,6 +357,7 @@ async fn prepare_keys(channel: &Channel, args: &Args, payload: &[u8]) -> Result<
     let mut sign_client = SignServiceClient::new(channel.clone());
     let mut cms_client = CmsServiceClient::new(channel.clone());
     let mut scep_client = ScepServiceClient::new(channel.clone());
+    let mut cmp_client = CmpServiceClient::new(channel.clone());
 
     let (priv_pem, cert_der) = load_or_generate_key_material(args)?;
 
@@ -425,6 +471,37 @@ async fn prepare_keys(channel: &Channel, args: &Args, payload: &[u8]) -> Result<
         .into_inner()
         .cms_der;
 
+    // CMP：OpenSSL 官方测试向量 IR_unprotected.der（RFC PKIMessage 结构）
+    const IR_UNPROTECTED: &[u8] = include_bytes!("../../testdata/cmp/IR_unprotected.der");
+    let (cmp_pki_header_der, cmp_pki_body_der) =
+        crypto_offload_server::crypto_cmp::split_pki_message(IR_UNPROTECTED)
+            .context("split IR_unprotected.der for CMP benchmark fixture")?;
+    let (cmp_ready, cmp_pki_message_der) = match cmp_client
+        .build_protected_pki_message(BuildCmpProtectedPkiMessageRequest {
+            pki_header_der: cmp_pki_header_der.clone(),
+            pki_body_der: cmp_pki_body_der.clone(),
+            sign_key_id: cms_meta.key_id.clone(),
+            hash_algorithm: HashAlgorithm::HashSha256 as i32,
+            sign_algorithm: SignAlgorithm::SignRsaPkcs1V15 as i32,
+        })
+        .await
+    {
+        Ok(resp) => {
+            let der = resp.into_inner().pki_message_der;
+            if der.is_empty() {
+                eprintln!("WARN: CMP build returned empty PKIMessage");
+                (false, Vec::new())
+            } else {
+                println!("cmp_fixture_der_bytes: {}", der.len());
+                (true, der)
+            }
+        }
+        Err(e) => {
+            eprintln!("WARN: CMP fixture unavailable (server/OpenSSL): {e}");
+            (false, Vec::new())
+        }
+    };
+
     println!(
         "key_import_ms: {:.2} (one-time setup, excluded from qps)",
         t0.elapsed().as_secs_f64() * 1000.0
@@ -441,6 +518,7 @@ async fn prepare_keys(channel: &Channel, args: &Args, payload: &[u8]) -> Result<
         .into_inner()
         .signature;
 
+    let cmp_sign_key_id = cms_meta.key_id.clone();
     Ok(BenchKeys {
         private_key_id: priv_meta.key_id,
         public_key_id: pub_meta.key_id,
@@ -459,6 +537,12 @@ async fn prepare_keys(channel: &Channel, args: &Args, payload: &[u8]) -> Result<
         scep_pkio_der,
         scep_success_certrep_der,
         recipient_nonce,
+        cmp_ready,
+        cmp_sign_key_id: cmp_sign_key_id.clone(),
+        cmp_verify_key_id: cmp_sign_key_id,
+        cmp_pki_message_der,
+        cmp_pki_header_der,
+        cmp_pki_body_der,
     })
 }
 
@@ -791,6 +875,44 @@ async fn run_one(channel: &Channel, mode: BenchMode, keys: &BenchKeys) -> Result
                     &parsed.wrapper_cert_der,
                     ENVELOPE_UNSPECIFIED,
                 ))
+                .await?;
+        }
+        BenchMode::CmpParse => {
+            CmpServiceClient::new(channel.clone())
+                .parse_pki_message(ParseCmpPkiMessageRequest {
+                    pki_message_der: keys.cmp_pki_message_der.clone(),
+                })
+                .await?;
+        }
+        BenchMode::CmpVerify => {
+            CmpServiceClient::new(channel.clone())
+                .verify_pki_message_protection(VerifyCmpPkiMessageProtectionRequest {
+                    pki_message_der: keys.cmp_pki_message_der.clone(),
+                    verify_key_id: keys.cmp_verify_key_id.clone(),
+                    hash_algorithm: HashAlgorithm::HashSha256 as i32,
+                    sign_algorithm: SignAlgorithm::SignRsaPkcs1V15 as i32,
+                })
+                .await?;
+        }
+        BenchMode::CmpParseVerify => {
+            CmpServiceClient::new(channel.clone())
+                .parse_and_verify_pki_message(ParseAndVerifyCmpPkiMessageRequest {
+                    pki_message_der: keys.cmp_pki_message_der.clone(),
+                    verify_key_id: keys.cmp_verify_key_id.clone(),
+                    hash_algorithm: HashAlgorithm::HashSha256 as i32,
+                    sign_algorithm: SignAlgorithm::SignRsaPkcs1V15 as i32,
+                })
+                .await?;
+        }
+        BenchMode::CmpBuild => {
+            CmpServiceClient::new(channel.clone())
+                .build_protected_pki_message(BuildCmpProtectedPkiMessageRequest {
+                    pki_header_der: keys.cmp_pki_header_der.clone(),
+                    pki_body_der: keys.cmp_pki_body_der.clone(),
+                    sign_key_id: keys.cmp_sign_key_id.clone(),
+                    hash_algorithm: HashAlgorithm::HashSha256 as i32,
+                    sign_algorithm: SignAlgorithm::SignRsaPkcs1V15 as i32,
+                })
                 .await?;
         }
     }

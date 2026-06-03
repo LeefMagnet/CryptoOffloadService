@@ -17,6 +17,7 @@ const CMP_SHIM_ERR_BODY_DER: c_int = -4;
 const CMP_SHIM_ERR_OID_INVALID: c_int = -5;
 const CMP_SHIM_ERR_OPENSSL_ALLOC: c_int = -6;
 const CMP_SHIM_ERR_OPENSSL_ENCODE: c_int = -7;
+const CMP_SHIM_ERR_MSG_DER: c_int = -8;
 
 #[derive(Debug, Clone)]
 pub struct ParsedCmpMessage {
@@ -274,6 +275,42 @@ unsafe extern "C" {
         out_der: *mut *mut u8,
         out_der_len: *mut c_int,
     ) -> c_int;
+
+    #[link_name = "cmp_shim_split_pki_message"]
+    fn cmp_shim_split_pki_message_raw(
+        msg_der: *const u8,
+        msg_der_len: c_int,
+        header_der: *mut *mut u8,
+        header_der_len: *mut c_int,
+        body_der: *mut *mut u8,
+        body_der_len: *mut c_int,
+    ) -> c_int;
+}
+
+/// Split a complete PKIMessage DER into header/body (OpenSSL `d2i_OSSL_CMP_MSG`).
+pub fn split_pki_message(pki_message_der: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
+    unsafe {
+        let mut hdr: *mut u8 = std::ptr::null_mut();
+        let mut hdr_len: c_int = 0;
+        let mut body: *mut u8 = std::ptr::null_mut();
+        let mut body_len: c_int = 0;
+        let code = cmp_shim_split_pki_message_raw(
+            pki_message_der.as_ptr(),
+            pki_message_der.len() as c_int,
+            &mut hdr,
+            &mut hdr_len,
+            &mut body,
+            &mut body_len,
+        );
+        if code != CMP_SHIM_OK {
+            bail!("{}", map_cmp_shim_error("split_pki_message", code));
+        }
+        let header = std::slice::from_raw_parts(hdr as *const u8, hdr_len as usize).to_vec();
+        let body_bytes = std::slice::from_raw_parts(body as *const u8, body_len as usize).to_vec();
+        ffi::OPENSSL_free(hdr as *mut c_void);
+        ffi::OPENSSL_free(body as *mut c_void);
+        Ok((header, body_bytes))
+    }
 }
 
 fn cmp_shim_build_protected_part(header: &[u8], body: &[u8]) -> Result<Vec<u8>> {
@@ -342,10 +379,19 @@ fn map_cmp_shim_error(op: &str, code: c_int) -> String {
             format!("CMP_SHIM_INVALID_ARGUMENT({op}): invalid DER/signature length")
         }
         CMP_SHIM_ERR_HEADER_DER => {
-            format!("CMP_SHIM_INVALID_ARGUMENT({op}): pki_header_der must be DER SEQUENCE")
+            format!(
+                "CMP_SHIM_INVALID_ARGUMENT({op}): pki_header_der must be valid PKIHeader (d2i_OSSL_CMP_PKIHEADER)"
+            )
         }
         CMP_SHIM_ERR_BODY_DER => {
-            format!("CMP_SHIM_INVALID_ARGUMENT({op}): pki_body_der must be context-specific DER")
+            format!(
+                "CMP_SHIM_INVALID_ARGUMENT({op}): pki_body_der must be valid PKIBody (d2i_OSSL_CMP_PKIBODY)"
+            )
+        }
+        CMP_SHIM_ERR_MSG_DER => {
+            format!(
+                "CMP_SHIM_INVALID_ARGUMENT({op}): pki_message_der must be valid PKIMessage (d2i_OSSL_CMP_MSG)"
+            )
         }
         CMP_SHIM_ERR_OID_INVALID => {
             format!("CMP_SHIM_INVALID_ARGUMENT({op}): invalid protection algorithm oid")

@@ -45,7 +45,7 @@ pub fn sign(
             let md = hash_algorithm_to_md(hash_algorithm)?;
             sign_ecdsa(private, data, md)?
         }
-        SignAlgorithm::SignSm2 => sign_sm2(private, data)?,
+        SignAlgorithm::SignSm2 => crate::crypto_sm2::sign(private, data)?,
         SignAlgorithm::SignEd25519 => sign_ed25519(private, data)?,
         SignAlgorithm::Unspecified => unreachable!(),
     };
@@ -90,7 +90,7 @@ pub fn verify(
             let md = hash_algorithm_to_md(hash_algorithm)?;
             verify_ecdsa(public, data, signature, md)
         }
-        SignAlgorithm::SignSm2 => verify_sm2(public, data, signature),
+        SignAlgorithm::SignSm2 => crate::crypto_sm2::verify(public, data, signature),
         SignAlgorithm::SignEd25519 => verify_ed25519(public, data, signature),
         SignAlgorithm::Unspecified => unreachable!(),
     }
@@ -126,13 +126,6 @@ fn sign_ecdsa(
     let mut signer = Signer::new(md, key).context("create ECDSA signer")?;
     signer.update(data).context("signer update")?;
     signer.sign_to_vec().context("ECDSA sign")
-}
-
-fn sign_sm2(key: &PKey<openssl::pkey::Private>, data: &[u8]) -> Result<Vec<u8>> {
-    let md = MessageDigest::sm3();
-    let mut signer = Signer::new(md, key).context("create SM2 signer")?;
-    signer.update(data).context("signer update")?;
-    signer.sign_to_vec().context("SM2 sign")
 }
 
 fn sign_ed25519(key: &PKey<openssl::pkey::Private>, data: &[u8]) -> Result<Vec<u8>> {
@@ -173,13 +166,6 @@ fn verify_ecdsa(
     let mut verifier = Verifier::new(md, key).context("create ECDSA verifier")?;
     verifier.update(data).context("verifier update")?;
     Ok(verifier.verify(signature).context("ECDSA verify")?)
-}
-
-fn verify_sm2(key: &PKey<openssl::pkey::Public>, data: &[u8], signature: &[u8]) -> Result<bool> {
-    let md = MessageDigest::sm3();
-    let mut verifier = Verifier::new(md, key).context("create SM2 verifier")?;
-    verifier.update(data).context("verifier update")?;
-    Ok(verifier.verify(signature).context("SM2 verify")?)
 }
 
 fn verify_ed25519(

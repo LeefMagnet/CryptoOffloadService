@@ -1031,23 +1031,5 @@ fn generate_ed25519_pem() -> Result<Vec<u8>> {
 }
 
 fn generate_sm2_pem() -> Result<(Vec<u8>, Vec<u8>)> {
-    let group = EcGroup::from_curve_name(Nid::SM2)?;
-    let ec_key = EcKey::generate(&group)?;
-    let pkey = PKey::from_ec_key(ec_key)?;
-    let priv_pem = pkey.private_key_to_pem_pkcs8()?;
-
-    let mut name = X509NameBuilder::new()?;
-    name.append_entry_by_text("CN", "bench-sm2")?;
-    let name = name.build();
-    let mut builder = X509Builder::new()?;
-    builder.set_version(2)?;
-    builder.set_subject_name(&name)?;
-    builder.set_issuer_name(&name)?;
-    builder.set_pubkey(&pkey)?;
-    let not_before = Asn1Time::days_from_now(0).context("not_before")?;
-    let not_after = Asn1Time::days_from_now(365).context("not_after")?;
-    builder.set_not_before(&not_before)?;
-    builder.set_not_after(&not_after)?;
-    builder.sign(&pkey, MessageDigest::sm3())?;
-    Ok((priv_pem, builder.build().to_pem()?))
+    crypto_offload_server::crypto_sm2::generate_sm2_pem()
 }

@@ -1,9 +1,11 @@
 pub mod crypto_cmp;
+pub mod crypto_sm2;
 pub mod crypto_cms;
 pub mod crypto_scep;
 pub mod crypto_scep_ext;
 pub mod crypto_sign;
 pub mod key_store;
+pub mod pkey_util;
 pub mod openssl_init;
 pub mod scep_cert_alias;
 pub mod scep_certrep;
@@ -198,31 +200,7 @@ pub mod test_support {
 
     /// 生成 SM2 密钥对 + 自签证书（需 OpenSSL 支持 SM2/SM3）。
     pub fn generate_sm2_pem() -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
-        use openssl::ec::{EcGroup, EcKey};
-        use openssl::nid::Nid;
-
-        let group = EcGroup::from_curve_name(Nid::SM2)?;
-        let ec_key = EcKey::generate(&group)?;
-        let pkey = PKey::from_ec_key(ec_key)?;
-        let priv_pem = pkey.private_key_to_pem_pkcs8()?;
-
-        let mut name = X509NameBuilder::new()?;
-        name.append_entry_by_text("CN", "sm2-test")?;
-        let name = name.build();
-
-        let mut builder = X509Builder::new()?;
-        builder.set_version(2)?;
-        builder.set_subject_name(&name)?;
-        builder.set_issuer_name(&name)?;
-        builder.set_pubkey(&pkey)?;
-        let not_before = Asn1Time::days_from_now(0)?;
-        let not_after = Asn1Time::days_from_now(365)?;
-        builder.set_not_before(&not_before)?;
-        builder.set_not_after(&not_after)?;
-        builder.sign(&pkey, MessageDigest::sm3())?;
-        let cert = builder.build();
-        let cert_pem = cert.to_pem()?;
-        Ok((priv_pem, cert_pem))
+        crate::crypto_sm2::generate_sm2_pem()
     }
 
     pub fn generate_ec256_pem() -> anyhow::Result<Vec<u8>> {

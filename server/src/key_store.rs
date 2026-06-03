@@ -1,6 +1,8 @@
 use anyhow::{anyhow, bail, Context, Result};
 use openssl::hash::MessageDigest;
-use openssl::pkey::{Id, PKey, Private, Public};
+use openssl::pkey::{PKey, Private, Public};
+
+use crate::pkey_util::{self, PkeyFamily};
 use openssl::x509::X509;
 use std::collections::HashMap;
 use std::sync::{Arc, PoisonError, RwLock};
@@ -241,22 +243,21 @@ fn parse_certificate(data: &[u8], format: i32) -> Result<X509> {
 }
 
 fn describe_key(material: &KeyMaterial) -> (String, i32) {
-    let id = match material {
-        KeyMaterial::Private { key, .. } => key.id(),
-        KeyMaterial::Public { key, .. } => key.id(),
-    };
-    let bits = match material {
-        KeyMaterial::Private { key, .. } => key.bits(),
-        KeyMaterial::Public { key, .. } => key.bits(),
-    };
-    let algorithm = match id {
-        Id::RSA => "RSA".to_string(),
-        Id::EC => "EC".to_string(),
-        Id::SM2 => "SM2".to_string(),
-        Id::ED25519 => "Ed25519".to_string(),
-        other => format!("{other:?}"),
-    };
-    (algorithm, bits as i32)
+    match material {
+        KeyMaterial::Private { key, .. } => {
+            (pkey_util::algorithm_label(key), key.bits() as i32)
+        }
+        KeyMaterial::Public { key, .. } => {
+            (pkey_util::algorithm_label(key), key.bits() as i32)
+        }
+    }
+}
+
+fn material_family(material: &KeyMaterial) -> PkeyFamily {
+    match material {
+        KeyMaterial::Private { key, .. } => pkey_util::pkey_family(key),
+        KeyMaterial::Public { key, .. } => pkey_util::pkey_family(key),
+    }
 }
 
 pub fn hash_algorithm_to_md(hash: i32) -> Result<MessageDigest> {
@@ -300,38 +301,13 @@ pub fn resolve_hash_algorithm(
 }
 
 pub fn infer_sign_algorithm(material: &KeyMaterial, requested: i32) -> Result<SignAlgorithm> {
-    let id = match material {
-        KeyMaterial::Private { key, .. } => key.id(),
-        KeyMaterial::Public { key, .. } => key.id(),
+    let family = material_family(material);
+    let req = if requested != SignAlgorithm::Unspecified as i32 {
+        SignAlgorithm::try_from(requested).map_err(|_| anyhow!("invalid sign algorithm"))?
+    } else {
+        SignAlgorithm::Unspecified
     };
-    if requested != SignAlgorithm::Unspecified as i32 {
-        let req =
-            SignAlgorithm::try_from(requested).map_err(|_| anyhow!("invalid sign algorithm"))?;
-        validate_sign_algorithm_for_key(id, req)?;
-        return Ok(req);
-    }
-    Ok(match id {
-        Id::RSA => SignAlgorithm::SignRsaPkcs1V15,
-        Id::EC => SignAlgorithm::SignEcdsa,
-        Id::ED25519 => SignAlgorithm::SignEd25519,
-        Id::SM2 => SignAlgorithm::SignSm2,
-        other => bail!("unsupported key type for signing: {other:?}"),
-    })
-}
-
-fn validate_sign_algorithm_for_key(id: Id, alg: SignAlgorithm) -> Result<()> {
-    use SignAlgorithm::*;
-    match (id, alg) {
-        (Id::RSA, SignRsaPkcs1V15) | (Id::RSA, SignRsaPss) => Ok(()),
-        (Id::EC, SignEcdsa) => Ok(()),
-        (Id::ED25519, SignEd25519) => Ok(()),
-        (Id::SM2, SignSm2) => Ok(()),
-        (Id::RSA, _) => bail!("RSA key requires SIGN_RSA_PKCS1_V15 or SIGN_RSA_PSS"),
-        (Id::EC, _) => bail!("EC key requires SIGN_ECDSA"),
-        (Id::ED25519, _) => bail!("Ed25519 key requires SIGN_ED25519"),
-        (Id::SM2, _) => bail!("SM2 key requires SIGN_SM2"),
-        (other, _) => bail!("unsupported key type for signing: {other:?}"),
-    }
+    pkey_util::infer_sign_algorithm(family, req).map_err(Into::into)
 }
 
 pub fn ensure_private(material: &KeyMaterial) -> Result<&PKey<Private>> {

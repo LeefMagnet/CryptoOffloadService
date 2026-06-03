@@ -6,7 +6,7 @@ use openssl::error::ErrorStack;
 use openssl::hash::MessageDigest;
 use openssl::nid::Nid;
 use openssl::pkcs7::{Pkcs7, Pkcs7Flags};
-use openssl::pkey::{Id, PKeyRef, Private};
+use openssl::pkey::{PKeyRef, Private};
 use openssl::rand::rand_bytes;
 use openssl::stack::Stack;
 use openssl::symm::Cipher;
@@ -218,7 +218,7 @@ pub fn build_gm_inner_signed_data(
 }
 
 fn ca_message_digest(ca_key: &PKeyRef<Private>) -> MessageDigest {
-    if ca_key.id() == Id::SM2 {
+    if crate::crypto_sm2::is_sm2_pkey_ref(ca_key) {
         MessageDigest::sm3()
     } else {
         MessageDigest::sha256()

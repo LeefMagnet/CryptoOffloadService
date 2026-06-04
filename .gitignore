@@ -16,6 +16,8 @@ sdk/java/target/
 build_output.log
 rust_setup.log
 *.pem
+!server/testdata/**/*.pem
 *.der
 !server/testdata/**/*.der
 *.key
+!server/testdata/**/*.key

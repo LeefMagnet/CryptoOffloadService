@@ -355,6 +355,169 @@ end:
     return ok;
 }
 
+/* -------- Parse-time extractors (work from DER, no libcrypto structs across FFI) -------- */
+
+/* Extract body type (PKIBody context-specific tag number) from PKIMessage DER. */
+int cmp_shim_get_body_type(const unsigned char *msg_der, int msg_der_len) {
+    long len = 0;
+    int tag = 0;
+    int xclass = 0;
+    const unsigned char *p = msg_der;
+    const unsigned char *end = msg_der + msg_der_len;
+    int ret = ASN1_get_object(&p, &len, &tag, &xclass, end - p);
+    if ((ret & 0x80) != 0 || tag != V_ASN1_SEQUENCE) {
+        return -1;
+    }
+    const unsigned char *seq_end = p + len;
+    /* skip PKIHeader (first element) */
+    ret = ASN1_get_object(&p, &len, &tag, &xclass, seq_end - p);
+    if ((ret & 0x80) != 0) {
+        return -1;
+    }
+    p += len;
+    /* PKIBody is the second element — read its tag */
+    if (p >= seq_end) {
+        return -1;
+    }
+    ret = ASN1_get_object(&p, &len, &tag, &xclass, seq_end - p);
+    if ((ret & 0x80) != 0) {
+        return -1;
+    }
+    if (xclass != V_ASN1_CONTEXT_SPECIFIC) {
+        return -1;
+    }
+    return tag & 0x1F; /* context-specific tag number */
+}
+
+/* Extract field-by-field info from PKIHeader DER. Caller must free each non-null output. */
+int cmp_shim_parse_header_fields(
+    const unsigned char *header_der, int header_der_len,
+    char **out_protection_alg_oid, int *out_oid_len,
+    unsigned char **out_sender_nonce, int *out_sn_len,
+    unsigned char **out_transaction_id, int *out_tx_len,
+    unsigned char **out_recipient_nonce, int *out_rn_len)
+{
+    OSSL_CMP_PKIHEADER *hdr = NULL;
+    struct cmp_pkiheader_fields *hf = NULL;
+    int ok = CMP_SHIM_OK;
+
+    if (header_der == NULL || header_der_len <= 0) {
+        return CMP_SHIM_ERR_BAD_LENGTH;
+    }
+
+    hdr = d2i_pkiheader(header_der, header_der_len);
+    if (hdr == NULL) {
+        return CMP_SHIM_ERR_HEADER_DER;
+    }
+    hf = (struct cmp_pkiheader_fields *)hdr;
+
+    /* protectionAlg OID → string */
+    if (hf->protectionAlg != NULL && out_protection_alg_oid != NULL && out_oid_len != NULL) {
+        const ASN1_OBJECT *alg_obj = NULL;
+        X509_ALGOR_get0(&alg_obj, NULL, NULL, hf->protectionAlg);
+        if (alg_obj != NULL) {
+            int n = OBJ_obj2txt(NULL, 0, alg_obj, 1);
+            if (n > 0) {
+                char *buf = OPENSSL_malloc((size_t)(n + 1));
+                if (buf != NULL) {
+                    OBJ_obj2txt(buf, n + 1, alg_obj, 1);
+                    *out_protection_alg_oid = buf;
+                    *out_oid_len = n;
+                }
+            }
+        }
+    }
+
+    /* senderNonce */
+    if (hf->senderNonce != NULL && out_sender_nonce != NULL && out_sn_len != NULL) {
+        int n = ASN1_STRING_length((const ASN1_STRING *)hf->senderNonce);
+        const unsigned char *d = ASN1_STRING_get0_data((const ASN1_STRING *)hf->senderNonce);
+        if (n > 0 && d != NULL) {
+            *out_sender_nonce = OPENSSL_malloc((size_t)n);
+            if (*out_sender_nonce != NULL) {
+                memcpy(*out_sender_nonce, d, (size_t)n);
+                *out_sn_len = n;
+            }
+        }
+    }
+
+    /* transactionID */
+    if (hf->transactionID != NULL && out_transaction_id != NULL && out_tx_len != NULL) {
+        int n = ASN1_STRING_length((const ASN1_STRING *)hf->transactionID);
+        const unsigned char *d = ASN1_STRING_get0_data((const ASN1_STRING *)hf->transactionID);
+        if (n > 0 && d != NULL) {
+            *out_transaction_id = OPENSSL_malloc((size_t)n);
+            if (*out_transaction_id != NULL) {
+                memcpy(*out_transaction_id, d, (size_t)n);
+                *out_tx_len = n;
+            }
+        }
+    }
+
+    /* recipientNonce */
+    if (hf->recipientNonce != NULL && out_recipient_nonce != NULL && out_rn_len != NULL) {
+        int n = ASN1_STRING_length((const ASN1_STRING *)hf->recipientNonce);
+        const unsigned char *d = ASN1_STRING_get0_data((const ASN1_STRING *)hf->recipientNonce);
+        if (n > 0 && d != NULL) {
+            *out_recipient_nonce = OPENSSL_malloc((size_t)n);
+            if (*out_recipient_nonce != NULL) {
+                memcpy(*out_recipient_nonce, d, (size_t)n);
+                *out_rn_len = n;
+            }
+        }
+    }
+
+    OSSL_CMP_PKIHEADER_free(hdr);
+    return ok;
+}
+
+/* Extract protection BIT STRING value (without unused-bits byte) from PKIMessage DER. */
+int cmp_shim_get_protection(const unsigned char *msg_der, int msg_der_len,
+                            unsigned char **out, int *out_len) {
+    const unsigned char *p = msg_der;
+    OSSL_CMP_MSG *msg = NULL;
+    struct cmp_msg_fields *mf = NULL;
+    int ok = CMP_SHIM_OK;
+
+    if (msg_der == NULL || msg_der_len <= 0 || out == NULL || out_len == NULL) {
+        return CMP_SHIM_ERR_NULL_ARG;
+    }
+
+    *out = NULL;
+    *out_len = 0;
+
+    msg = d2i_OSSL_CMP_MSG(NULL, &p, msg_der_len);
+    if (msg == NULL) {
+        return CMP_SHIM_ERR_MSG_DER;
+    }
+    mf = (struct cmp_msg_fields *)msg;
+
+    if (mf->protection == NULL) {
+        OSSL_CMP_MSG_free(msg);
+        return CMP_SHIM_OK; /* no protection is not an error */
+    }
+
+    int n = ASN1_STRING_length((const ASN1_STRING *)mf->protection);
+    const unsigned char *d = ASN1_STRING_get0_data((const ASN1_STRING *)mf->protection);
+    if (n > 0 && d != NULL) {
+        /* Strip unused-bits octet (BIT STRING encoding): OpenSSL adds 1 unused-bits byte. */
+        int data_len = n - 1;
+        if (data_len > 0) {
+            unsigned char *buf = OPENSSL_malloc((size_t)data_len);
+            if (buf != NULL) {
+                memcpy(buf, d + 1, (size_t)data_len);
+                *out = buf;
+                *out_len = data_len;
+            } else {
+                ok = CMP_SHIM_ERR_OPENSSL_ALLOC;
+            }
+        }
+    }
+
+    OSSL_CMP_MSG_free(msg);
+    return ok;
+}
+
 int cmp_shim_split_pki_message(const unsigned char *msg_der, int msg_der_len,
                                unsigned char **header_der, int *header_der_len,
                                unsigned char **body_der, int *body_der_len) {

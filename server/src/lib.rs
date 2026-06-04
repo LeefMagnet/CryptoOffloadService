@@ -291,6 +291,41 @@ pub mod test_support {
         Ok((pkio_der, csr_der, wrapper_cert_der))
     }
 
+    /// PKCS#10 CSR（Ed25519 公钥），用于 SCEP Enroll 密码信封场景。
+    pub fn generate_ed25519_csr_der() -> anyhow::Result<Vec<u8>> {
+        use openssl::x509::X509Req;
+
+        let client_key = PKey::generate_ed25519()?;
+        let mut name = X509NameBuilder::new()?;
+        name.append_entry_by_text("CN", "scep-ed25519-client")?;
+        let name = name.build();
+        let mut req_builder = X509Req::builder()?;
+        req_builder.set_subject_name(&name)?;
+        req_builder.set_pubkey(&client_key)?;
+        // EdDSA 不允许显式 digest（OpenSSL 3.x）
+        req_builder.sign(&client_key, MessageDigest::null())?;
+        Ok(req_builder.build().to_der()?)
+    }
+
+    fn sign_scep_pkio_outer(
+        wrapper_key: &PKey<openssl::pkey::Private>,
+        wrapper_cert: &X509,
+        enveloped_der: &[u8],
+    ) -> anyhow::Result<Vec<u8>> {
+        use openssl::pkcs7::{Pkcs7, Pkcs7Flags};
+        use openssl::stack::Stack;
+
+        let certs = Stack::new()?;
+        let outer = Pkcs7::sign(
+            wrapper_cert,
+            wrapper_key,
+            &certs,
+            enveloped_der,
+            Pkcs7Flags::BINARY,
+        )?;
+        Ok(outer.to_der()?)
+    }
+
     /// SCEP PKIO：内层 `PasswordRecipientInfo`（RFC 8894 §3.1），外层 ECDSA wrapper 签名。
     /// 返回 `(pkio_der, inner_plaintext, wrapper_cert_der)`。
     pub fn generate_scep_pkio_password(
@@ -300,8 +335,6 @@ pub mod test_support {
         crate::openssl_init::init();
         use openssl::ec::{EcGroup, EcKey};
         use openssl::nid::Nid;
-        use openssl::pkcs7::{Pkcs7, Pkcs7Flags};
-        use openssl::stack::Stack;
         use openssl::symm::Cipher;
 
         crate::scep_password_envelope::validate_challenge_password(password)?;
@@ -310,7 +343,7 @@ pub mod test_support {
         let ec_key = EcKey::generate(&group)?;
         let wrapper_key = PKey::from_ec_key(ec_key)?;
         let mut name = X509NameBuilder::new()?;
-        name.append_entry_by_text("CN", "scep-pw-wrapper")?;
+        name.append_entry_by_text("CN", "scep-pw-wrapper-ecdsa")?;
         let name = name.build();
         let mut builder = X509Builder::new()?;
         builder.set_version(2)?;
@@ -329,16 +362,54 @@ pub mod test_support {
             password,
             Cipher::aes_128_cbc(),
         )?;
+        let pkio_der = sign_scep_pkio_outer(&wrapper_key, &wrapper_cert, &enveloped_der)?;
+        Ok((pkio_der, plaintext.to_vec(), wrapper_cert.to_der()?))
+    }
 
-        let certs = Stack::new()?;
-        let outer = Pkcs7::sign(
-            &wrapper_cert,
-            &wrapper_key,
-            &certs,
-            &enveloped_der,
-            Pkcs7Flags::BINARY,
+    /// 内层 `PasswordRecipientInfo`，外层 **RSA** wrapper 签名（挑战码解密，wrapper 仅验签/标识）。
+    pub fn generate_scep_pkio_password_rsa_wrapper(
+        password: &str,
+        plaintext: &[u8],
+    ) -> anyhow::Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+        crate::openssl_init::init();
+        use openssl::symm::Cipher;
+
+        crate::scep_password_envelope::validate_challenge_password(password)?;
+
+        let wrapper_key = {
+            let rsa = Rsa::generate(2048)?;
+            PKey::from_rsa(rsa)?
+        };
+        let mut name = X509NameBuilder::new()?;
+        name.append_entry_by_text("CN", "scep-pw-wrapper-rsa")?;
+        let name = name.build();
+        let mut builder = X509Builder::new()?;
+        builder.set_version(2)?;
+        builder.set_subject_name(&name)?;
+        builder.set_issuer_name(&name)?;
+        builder.set_pubkey(&wrapper_key)?;
+        let not_before = Asn1Time::days_from_now(0)?;
+        let not_after = Asn1Time::days_from_now(365)?;
+        builder.set_not_before(&not_before)?;
+        builder.set_not_after(&not_after)?;
+        builder.sign(&wrapper_key, MessageDigest::sha256())?;
+        let wrapper_cert = builder.build();
+
+        let enveloped_der = crate::scep_password_envelope::encrypt_envelope_password(
+            plaintext,
+            password,
+            Cipher::aes_128_cbc(),
         )?;
-        Ok((outer.to_der()?, plaintext.to_vec(), wrapper_cert.to_der()?))
+        let pkio_der = sign_scep_pkio_outer(&wrapper_key, &wrapper_cert, &enveloped_der)?;
+        Ok((pkio_der, plaintext.to_vec(), wrapper_cert.to_der()?))
+    }
+
+    /// Ed25519 CSR + 挑战码内层信封 + RSA wrapper（典型无 RSA 加密能力终端）。
+    pub fn generate_scep_pkio_ed25519_password(
+        password: &str,
+    ) -> anyhow::Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+        let csr_der = generate_ed25519_csr_der()?;
+        generate_scep_pkio_password_rsa_wrapper(password, &csr_der)
     }
 
     /// GetCert 类 PKIO：内层为 CertAliasOrCn（alias），结构同 PKIO。

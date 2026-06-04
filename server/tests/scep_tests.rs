@@ -8,7 +8,8 @@ use crypto_offload_server::cryptooffload::v1::{KeyFormat, KeyKind, KeyLifetime};
 use crypto_offload_server::key_store::KeyStore;
 use crypto_offload_server::openssl_init;
 use crypto_offload_server::test_support::{
-    generate_rsa2048_der_cert, generate_scep_pkio, generate_scep_pkio_password,
+    generate_rsa2048_der_cert, generate_scep_pkio, generate_scep_pkio_ed25519_password,
+    generate_scep_pkio_password, generate_scep_pkio_password_rsa_wrapper,
 };
 use openssl::x509::X509;
 
@@ -441,6 +442,135 @@ fn scep_parse_request_password_pkio() {
         crypto_scep::parse_request(&pkio_der, access, Some(password)).expect("parse password PKIO");
     assert_eq!(plain, expected_plain);
     assert_eq!(wrapper, expected_wrapper);
+}
+
+#[test]
+fn scep_parse_request_rsa_csr_uses_ca_not_challenge() {
+    init_scep_test_openssl();
+    let store = KeyStore::new();
+    let (ca_id, ca_der) = import_ca(&store, "scep-ca-rsa-prio");
+    let ca_cert = X509::from_der(&ca_der).expect("ca cert");
+    let (pkio_der, expected_csr, expected_wrapper) =
+        generate_scep_pkio(&ca_cert).expect("RSA envelope PKIO");
+
+    let access = store.access_key(&ca_id).expect("access");
+    let (csr, wrapper) = crypto_scep::parse_request(&pkio_der, access, Some("ignored-challenge"))
+        .expect("CA KeyTrans decrypt must succeed without valid challenge");
+    assert_eq!(csr, expected_csr);
+    assert_eq!(wrapper, expected_wrapper);
+
+    let enveloped = {
+        let outer = openssl::pkcs7::Pkcs7::from_der(&pkio_der).expect("pkcs7");
+        crypto_offload_server::scep_pkio::extract_signed_content(&outer).expect("envelope")
+    };
+    assert!(
+        !crypto_offload_server::scep_password_envelope::enveloped_uses_password_recipient(
+            &enveloped
+        )
+        .expect("pwri check"),
+        "3DES KeyTrans enroll must not use PasswordRecipientInfo"
+    );
+}
+
+#[test]
+fn scep_parse_request_ed25519_csr_password_envelope() {
+    init_scep_test_openssl();
+    let store = KeyStore::new();
+    let (ca_id, _) = import_ca(&store, "scep-ca-ed25519-pw");
+    let password = "ed25519-enroll-challenge-pw";
+    let (pkio_der, expected_csr, expected_wrapper) =
+        generate_scep_pkio_ed25519_password(password).expect("ed25519 password PKIO");
+
+    let access = store.access_key(&ca_id).expect("access");
+    let (csr, wrapper) =
+        crypto_scep::parse_request(&pkio_der, access, Some(password)).expect("parse ed25519 PKIO");
+    assert_eq!(csr, expected_csr);
+    assert_eq!(wrapper, expected_wrapper);
+
+    let wrapper_cert = X509::from_der(&wrapper).expect("wrapper");
+    assert!(
+        wrapper_cert.public_key().expect("pk").rsa().is_ok(),
+        "password-envelope fixture uses RSA wrapper for outer sign"
+    );
+    let req = openssl::x509::X509Req::from_der(&csr).expect("pkcs10");
+    assert!(
+        req.public_key()
+            .expect("csr pubkey")
+            .id()
+            .eq(&openssl::pkey::Id::ED25519),
+        "inner plaintext must be Ed25519 PKCS#10 CSR"
+    );
+}
+
+#[test]
+fn scep_parse_password_envelope_rsa_wrapper_prefers_challenge() {
+    init_scep_test_openssl();
+    let store = KeyStore::new();
+    let (ca_id, _) = import_ca(&store, "scep-ca-pw-rsa-wrap");
+    let password = "rsa-wrapper-challenge-pw-01";
+    let csr = b"pkcs10-rsa-csr-placeholder";
+    let (pkio_der, expected_plain, expected_wrapper) =
+        generate_scep_pkio_password_rsa_wrapper(password, csr).expect("rsa wrapper password PKIO");
+
+    let wrapper_cert = X509::from_der(&expected_wrapper).expect("wrapper");
+    assert!(
+        wrapper_cert.public_key().expect("pk").rsa().is_ok(),
+        "wrapper must remain RSA even when decrypt uses challenge"
+    );
+
+    let access = store.access_key(&ca_id).expect("access");
+    let (plain, wrapper) =
+        crypto_scep::parse_request(&pkio_der, access, Some(password)).expect("challenge decrypt");
+    assert_eq!(plain, expected_plain);
+    assert_eq!(wrapper, expected_wrapper);
+
+    let access2 = store.access_key(&ca_id).expect("access again");
+    assert!(
+        crypto_scep::parse_request(&pkio_der, access2, None).is_err(),
+        "PasswordRecipientInfo must not fall back to CA RSA decrypt"
+    );
+
+    let access3 = store.access_key(&ca_id).expect("access wrong pw");
+    assert!(
+        crypto_scep::parse_request(&pkio_der, access3, Some("wrong-password")).is_err(),
+        "wrong challenge must fail even with valid CA key"
+    );
+}
+
+#[test]
+fn scep_build_success_certrep_rsa_wrapper_with_challenge_uses_password_envelope() {
+    init_scep_test_openssl();
+    let store = KeyStore::new();
+    let (ca_id, _) = import_ca(&store, "scep-ca-build-pw-rsa");
+    let password = "certrep-challenge-with-rsa-wrap";
+    let (_wrapper_pem, wrapper_der) = generate_rsa2048_der_cert().expect("wrapper");
+    let (_issued_pem, issued_der) = generate_rsa2048_der_cert().expect("issued");
+    let certrep = build_success_certrep_with_cipher(
+        &store,
+        &ca_id,
+        "tx-pw-rsa-wrapper",
+        &[0x55, 0x66],
+        &issued_der,
+        &wrapper_der,
+        ENVELOPE_AES128_CBC,
+        Some(password),
+    );
+    let outer = openssl::pkcs7::Pkcs7::from_der(&certrep).expect("certrep pkcs7");
+    let enveloped_der =
+        crypto_offload_server::scep_pkio::extract_signed_content(&outer).expect("inner envelope");
+    assert!(
+        crypto_offload_server::scep_password_envelope::enveloped_uses_password_recipient(
+            &enveloped_der
+        )
+        .expect("pwri"),
+        "non-empty challenge_password must use PasswordRecipientInfo, not RSA wrapper pubkey"
+    );
+    let plain = crypto_offload_server::scep_password_envelope::decrypt_envelope_password(
+        &enveloped_der,
+        password,
+    )
+    .expect("decrypt with challenge");
+    assert!(!plain.is_empty());
 }
 
 #[test]

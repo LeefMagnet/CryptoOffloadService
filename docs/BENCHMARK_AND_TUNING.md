@@ -141,13 +141,7 @@ MODE=sign CLIENTS=4 SERVER_PROFILE="wsl-unbound" ./scripts/benchmark/run_benchma
 | `WARMUP` | `3` | 预热秒数 |
 | `SERVER_PROFILE` | `unset` | 运维标注：如 `rust-cpuset-4-7,docker-cpus=4` |
 
-### 1.5 Python 压测（可选）
-
-```bash
-pip install grpcio protobuf
-make proto
-python scripts/benchmark/bench_python.py --mode sign --clients 8
-```
+> **压测客户端**：仅维护 Rust 二进制 `crypto-offload-benchmark`（`cargo build --release`），不提供 Python 压测脚本。
 
 ---
 

@@ -7,15 +7,8 @@
 # protobuf generated (regenerate via `make proto`)
 sdk/go/gen/**/*.go
 !sdk/go/gen/.gitkeep
-sdk/python/cryptooffload/gen/
-
 # Go
 sdk/go/bin/
-
-# Python
-sdk/python/**/__pycache__/
-sdk/python/*.egg-info/
-sdk/python/.venv/
 
 # Java
 sdk/java/target/

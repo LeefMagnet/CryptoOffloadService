@@ -241,7 +241,7 @@ stateDiagram-v2
 
 ### 1.5 SDK 方法对照
 
-生产接入推荐 **Go / Rust / Java**；Python SDK 保留但非主路径。
+**官方维护的接入语言：Go / Java / Rust。** 仓库不含 Python SDK；`make proto` 仅生成 Go stub（Rust 由 `tonic-build`，Java 由 Maven）。**后续需求与评审均不纳入 Python 客户端实现。**
 
 | gRPC RPC | Go | Rust | Java |
 |----------|-----|------|------|
@@ -995,7 +995,7 @@ proto/cryptooffload/v1/
 生成代码：
 
 ```bash
-make proto   # Go / Python / Java
+make proto   # Go；Java: cd sdk/java && mvn compile
 cargo build  # Rust（tonic-build 自动生成）
 ```
 
@@ -1005,8 +1005,7 @@ cargo build  # Rust（tonic-build 自动生成）
 
 | 语言 | 路径 | 覆盖能力 |
 |------|------|----------|
-| Go | [examples/go/demo/main.go](../examples/go/demo/main.go) | ImportKey、Sign、Verify、CMS |
-| Python | [examples/python/demo.py](../examples/python/demo.py) | 同上 |
+| Go | [examples/go/demo/main.go](../examples/go/demo/main.go) | ImportKey、Sign、Verify、CMS、CMP/SCEP（环境变量） |
 | Rust | [examples/rust/demo.rs](../examples/rust/demo.rs) | 同上 |
 | Java | [examples/java/Demo.java](../examples/java/Demo.java) | 同上 |
 

@@ -7,7 +7,7 @@
 
 ## 1. 一句话定位
 
-**CryptoOffloadService** 是一个以 **Rust + OpenSSL** 为核心的**密码运算 Sidecar**：业务进程（Go / Java / Python / Rust）通过 **gRPC + 连接池 SDK** 调用，把 RSA/EC/SM2/Ed25519 签名、CMS/PKCS#7、SCEP CertRep 等 **CPU 密集型** 运算从 JVM/Go 运行时中剥离，按 **`key_id`** 引用密钥，热路径不再搬运 PEM/DER。
+**CryptoOffloadService** 是一个以 **Rust + OpenSSL** 为核心的**密码运算 Sidecar**：业务进程（**Go / Java / Rust**）通过 **gRPC + 连接池 SDK** 调用，把 RSA/EC/SM2/Ed25519 签名、CMS/PKCS#7、SCEP CertRep 等 **CPU 密集型** 运算从 JVM/Go 运行时中剥离，按 **`key_id`** 引用密钥，热路径不再搬运 PEM/DER。
 
 ---
 
@@ -17,7 +17,7 @@
 |------|----------|-------------------|
 | Java/Go 里调 OpenSSL/BouncyCastle，GC 与 JNI 开销大 | 业务进程内嵌密码库 | 独立 Rust 进程，业务只传 `key_id` + 小包 |
 | SCEP RA 路径复杂（PKIO 解析、3DES Envelop、CertRep） | 各语言重复实现 PKCS#7 | **ScepService** 统一 offload |
-| 多语言产品线密码接口不一致 | 各写一套 | **Protobuf 契约** + 四语言 SDK |
+| 多语言产品线密码接口不一致 | 各写一套 | **Protobuf 契约** + Go/Java/Rust SDK |
 | 密码运算与业务抢 CPU | 同进程争用 | **cpuset / Docker cpus** 隔离 Sidecar |
 | JNI/内嵌库无法单独绑核 | OpenSSL 与 GC、HTTP 等同进程调度 | Sidecar **独占 CPU 核**，单核算力利用率大幅提升 |
 | 密钥在热路径反复解析 PEM | 每次请求 decode ASN.1 | **ImportKey 一次解析**，内存缓存 `PKey` |
@@ -35,7 +35,7 @@ flowchart TB
   subgraph Host["宿主机 / 容器"]
     subgraph Biz["业务进程 cpuset A"]
       App[业务逻辑<br/>RA / 网关 / 接入]
-      SDK[SDK 连接池<br/>Go / Java / Python / Rust]
+      SDK[SDK 连接池<br/>Go / Java / Rust]
     end
     subgraph Sidecar["CryptoOffload Sidecar cpuset B"]
       GRPC[gRPC Server]
@@ -192,14 +192,17 @@ CryptoOffload 作为**独立 Sidecar**，可用 `taskset` / Docker `cpuset` 为�
 
 ## 8. 多语言接入
 
-| 语言 | SDK | Demo |
-|------|-----|------|
-| Go | `sdk/go` | `examples/go/demo` |
-| Java | `sdk/java` | `examples/java/Demo.java` |
-| Python | `sdk/python` | `examples/python/demo.py` |
-| Rust | `sdk/rust` | `examples/rust/demo.rs` |
+### 8.1 支持范围（固定）
 
-**集成三步**
+| 语言 | SDK | Demo | 说明 |
+|------|-----|------|------|
+| Go | `sdk/go` | `examples/go/demo` | 主推，连接池与 SCEP/CMP 示例最全 |
+| Java | `sdk/java` | `examples/java/Demo.java` | RA/网关 JVM 侧 |
+| Rust | `sdk/rust` | `examples/rust/demo.rs` | 与 Sidecar 同栈，适合 Rust 业务或集成测试 |
+
+**不提供 Python SDK / 示例 / 压测脚本。** 业务若需脚本化验证，请用 `grpcurl`、Go/Rust 小工具或直接对接 proto；**后续版本也不再维护 Python 接入层**。
+
+### 8.2 集成三步
 
 1. 启动 Sidecar（或 Docker Compose）
 2. 启动/轮换时 `ImportKey` → 持久化 `key_id`（非 PEM）

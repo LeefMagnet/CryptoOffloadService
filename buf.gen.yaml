@@ -13,7 +13,3 @@ plugins:
     out: sdk/go/gen
     opt:
       - paths=source_relative
-  - remote: buf.build/protocolbuffers/python
-    out: sdk/python/cryptooffload/gen
-  - remote: buf.build/grpc/python
-    out: sdk/python/cryptooffload/gen

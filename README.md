@@ -8,8 +8,8 @@
 
 ```
 ┌──────────────┐     gRPC (Protobuf)      ┌─────────────────────────────┐
-│ Go / Python  │  ◄──── 连接池 SDK ────►  │ crypto-offload-server (Rust)│
-│ Java / Rust  │                          │  • KeyService  (KMS 式 key_id)│
+│ Go / Java /  │  ◄──── 连接池 SDK ────►  │ crypto-offload-server (Rust)│
+│ Rust         │                          │  • KeyService  (KMS 式 key_id)│
 └──────────────┘                          │  • SignService (签名/验签)     │
                                           │  • CmsService  (CMS 解析/封装) │
                                           │  • ScepService (SCEP PKIO/CertRep) │
@@ -66,7 +66,6 @@
 | 语言 | 运行方式 |
 |------|----------|
 | Go | `make proto && go run ./examples/go/demo` |
-| Python | `make proto && pip install -e sdk/python && python examples/python/demo.py` |
 | Rust | `cargo run --example demo --manifest-path examples/rust/Cargo.toml` |
 | Java | `cd sdk/java && mvn compile` 后运行 `examples/java/Demo.java` |
 
@@ -129,7 +128,7 @@ Docker 构建阶段会自动执行 `cargo test`；`test-runner` 容器对 `crypt
 
 ```bash
 # 需要安装 buf: https://buf.build/docs/installation
-make proto          # Go（sdk/go/gen/）与 Python stub
+make proto          # Go（sdk/go/gen/）
 cd sdk/java && mvn compile   # Java gRPC stub
 ```
 
@@ -193,27 +192,7 @@ signResp, err := cli.Sign(ctx, &pb.SignRequest{
 })
 ```
 
-### 4. Python SDK 示例
-
-```python
-from cryptooffload import Client, PoolConfig
-from cryptooffload.client import KeyKind, KeyLifetime, KeyFormat, HashAlgorithm
-
-client = Client.connect(PoolConfig(address="127.0.0.1:50051"))
-meta = client.import_key(
-    kind=KeyKind.KEY_KIND_PRIVATE,
-    lifetime=KeyLifetime.KEY_LIFETIME_TEMPORARY,
-    format=KeyFormat.KEY_FORMAT_PEM,
-    key_data=private_pem,
-)
-sig = client.sign(
-    key_id=meta.metadata.key_id,
-    data=b"payload",
-    hash_algorithm=HashAlgorithm.HASH_SHA256,
-)
-```
-
-### 5. Rust SDK 示例
+### 4. Rust SDK 示例
 
 ```rust
 use cryptooffload_sdk::{Client, PoolConfig};
@@ -250,7 +229,6 @@ proto/                  # Protobuf 定义
 server/                 # Rust gRPC 服务端
 sdk/
   go/                   # Go SDK（pool + client）
-  python/               # Python SDK
   rust/                 # Rust SDK
   java/                 # Java SDK
 deploy/                 # Docker / Compose
@@ -278,7 +256,7 @@ ScepAccelerator 使用自定义 UDS 二进制帧 + SCEP 专用 opcode。本项�
 
 - Rust 1.75+（推荐 1.83）
 - OpenSSL **3.x**（含 **legacy provider**，CMS 3DES 解密需要；**CmpService** 需 3.x CMP 符号 `OSSL_CMP_*`）
-- buf（生成 Go/Python stub）
-- Go 1.22+ / Python 3.10+ / JDK 17+（按 SDK 选用）
+- buf（生成 Go stub）
+- Go 1.22+ / JDK 17+ / Rust 1.75+（接入语言：**Go / Java / Rust**，不提供 Python SDK）
 
 CMP 压测/集成测试在仅系统 OpenSSL 2.x 或缺少 CMP 符号的环境会返回 `FAILED_PRECONDITION`；可链接自编译 OpenSSL 3.0/3.5（见 `scripts/benchmark/env_openssl.sh`）。

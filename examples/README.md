@@ -14,14 +14,6 @@ cd sdk/go && go mod tidy
 go run ../../examples/go/demo
 ```
 
-## Python
-
-```bash
-make proto
-pip install -e sdk/python cryptography
-PYTHONPATH=sdk/python python examples/python/demo.py
-```
-
 ## Rust
 
 ```bash

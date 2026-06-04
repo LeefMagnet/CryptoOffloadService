@@ -183,3 +183,104 @@ pub fn validate_cmp_build_request(req: &BuildCmpProtectedPkiMessageRequest) -> R
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pb::BuildScepGmSuccessCertRepRequest;
+    use tonic::Code;
+
+    fn valid_gm_success_req() -> BuildScepGmSuccessCertRepRequest {
+        BuildScepGmSuccessCertRepRequest {
+            ca_key_id: "ca-1".into(),
+            transaction_id: "tx-gm-001".into(),
+            recipient_nonce: b"\x01\x02\x03\x04".to_vec(),
+            sender_nonce: vec![],
+            sign_cert_der: b"\x30\x00".to_vec(),
+            encryption_cert_der: b"\x30\x00".to_vec(),
+            skf_content: b"BASE64SKFDATA==".to_vec(),
+            wrapper_cert_der: b"\x30\x00".to_vec(),
+            envelope_cipher: 1,
+            challenge_password: "".into(),
+        }
+    }
+
+    #[test]
+    fn gm_success_accepts_valid_request_with_wrapper() {
+        let req = valid_gm_success_req();
+        assert!(validate_scep_gm_success_request(&req).is_ok());
+    }
+
+    #[test]
+    fn gm_success_accepts_valid_request_with_challenge_no_wrapper() {
+        let mut req = valid_gm_success_req();
+        req.wrapper_cert_der.clear();
+        req.challenge_password = "device-secret".into();
+        assert!(validate_scep_gm_success_request(&req).is_ok());
+    }
+
+    #[test]
+    fn gm_success_rejects_empty_transaction_id() {
+        let mut req = valid_gm_success_req();
+        req.transaction_id.clear();
+        let err = validate_scep_gm_success_request(&req).unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("transaction_id"));
+    }
+
+    #[test]
+    fn gm_success_rejects_empty_recipient_nonce() {
+        let mut req = valid_gm_success_req();
+        req.recipient_nonce.clear();
+        let err = validate_scep_gm_success_request(&req).unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("recipient_nonce"));
+    }
+
+    #[test]
+    fn gm_success_rejects_empty_sign_cert_der() {
+        let mut req = valid_gm_success_req();
+        req.sign_cert_der.clear();
+        let err = validate_scep_gm_success_request(&req).unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("sign_cert_der"));
+    }
+
+    #[test]
+    fn gm_success_rejects_empty_encryption_cert_der() {
+        let mut req = valid_gm_success_req();
+        req.encryption_cert_der.clear();
+        let err = validate_scep_gm_success_request(&req).unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("encryption_cert_der"));
+    }
+
+    #[test]
+    fn gm_success_rejects_empty_skf_content() {
+        let mut req = valid_gm_success_req();
+        req.skf_content.clear();
+        let err = validate_scep_gm_success_request(&req).unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("skf_content"));
+    }
+
+    #[test]
+    fn gm_success_rejects_missing_wrapper_without_challenge() {
+        let mut req = valid_gm_success_req();
+        req.wrapper_cert_der.clear();
+        req.challenge_password.clear();
+        let err = validate_scep_gm_success_request(&req).unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("wrapper_cert_der"));
+    }
+
+    #[test]
+    fn gm_success_rejects_oversized_blobs() {
+        let mut req = valid_gm_success_req();
+        let huge = vec![0u8; MAX_SMALL_PACKET + 1];
+        req.sender_nonce = huge;
+        let err = validate_scep_gm_success_request(&req).unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("too large"));
+    }
+}

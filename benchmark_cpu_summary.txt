@@ -1,0 +1,139 @@
+=== CryptoOffload 全模式压测 — 1/2/3 核汇总 ===
+generated: 2026-06-03T23:08:11+08:00
+source: benchmark_report_1cpu.txt benchmark_report_2cpu.txt benchmark_report_3cpu.txt
+clients: 与 server_cpus 1:1（见各报告 clients 行）
+total_per_mode: 5000 | warmup: 2s | payload: 256B
+
+--- 1 核 | clients=1 | wsl-cpuset-0,server_cpus=1 ---
+    file: benchmark_report_1cpu.txt
+    date: 2026-06-03T23:00:32+08:00
+    cpu:  AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+
+--- 2 核 | clients=2 | wsl-cpuset-0-1,server_cpus=2 ---
+    file: benchmark_report_2cpu.txt
+    date: 2026-06-03T23:03:52+08:00
+    cpu:  AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+
+--- 3 核 | clients=3 | wsl-cpuset-0-2,server_cpus=3 ---
+    file: benchmark_report_3cpu.txt
+    date: 2026-06-03T23:06:15+08:00
+    cpu:  AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+
+=== 汇总表（QPS，clients = 核数）===
+mode                   |     1核 QPS |     2核 QPS |     3核 QPS | QPS/核¹
+--------------------------------------------------------------------------------
+sign                   |      1004 |      1665 |      2362 |      874
+verify                 |      1765 |      2636 |      3484 |     1414
+sign-verify            |       629 |       996 |      1416 |      532
+sign-rsa-pss           |       971 |      1566 |      2325 |      842
+sign-verify-rsa-pss    |       635 |      1007 |      1391 |      533
+sign-sm2               |       874 |      1445 |      2155 |      771
+sign-verify-sm2        |       446 |       754 |      1124 |      398
+sign-ed25519           |      1695 |      2699 |      3360 |     1388
+sign-verify-ed25519    |       726 |      1207 |      1650 |      626
+cms-build              |       878 |      1524 |      2178 |      788
+cms-parse              |      1308 |      2226 |      2999 |     1139
+cms-verify             |      1055 |      1894 |      2724 |      970
+cms-build-parse        |       534 |       876 |      1237 |      461
+scep-certrep-success   |       696 |      1136 |      1719 |      612
+scep-certrep-failure   |       904 |      1534 |      2184 |      799
+scep-certrep-pending   |       881 |      1566 |      2242 |      803
+scep-parse-request     |       749 |      1309 |      1945 |      683
+scep-certrep-verify    |      1079 |      1972 |      2750 |      993
+scep-parse-build-success |       360 |       608 |       913 |      322
+cmp-parse              |      1476 |      2410 |      3169 |     1245
+cmp-verify             |      1436 |      2381 |      3213 |     1232
+cmp-parse-verify       |      1216 |      1953 |      2830 |     1044
+cmp-build              |       823 |      1331 |      1975 |      715
+
+¹ QPS/核 列 = 各跑次 (QPS ÷ server_cpus) 的算术平均，便于横向对比模式强度。
+
+=== 分核明细（QPS | P50 µs | P99 µs）===
+
+#### 1 核 (clients=1)
+mode                              QPS     P50µs     P99µs    QPS/核
+------------------------------------------------------------------------
+sign                             1004        913       2095       1004
+verify                           1765        533       1133       1764
+sign-verify                       629       1487       2822        628
+sign-rsa-pss                      971        939       2191        970
+sign-verify-rsa-pss               635       1463       2898        634
+sign-sm2                          874       1048       2378        873
+sign-verify-sm2                   446       2105       3942        445
+sign-ed25519                     1695        555       1199       1695
+sign-verify-ed25519               726       1308       2509        726
+cms-build                         878       1060       2252        878
+cms-parse                        1308        714       1526       1307
+cms-verify                       1055        869       2066       1055
+cms-build-parse                   534       1746       3396        534
+scep-certrep-success              696       1302       3074        696
+scep-certrep-failure              904       1012       2230        904
+scep-certrep-pending              881       1036       2427        880
+scep-parse-request                749       1226       2712        748
+scep-certrep-verify              1079        824       2323       1079
+scep-parse-build-success          360       2637       4773        359
+cmp-parse                        1476        625       1397       1476
+cmp-verify                       1436        637       1453       1436
+cmp-parse-verify                 1216        751       1770       1215
+cmp-build                         823       1115       2396        822
+
+#### 2 核 (clients=2)
+mode                              QPS     P50µs     P99µs    QPS/核
+------------------------------------------------------------------------
+sign                             1665       1126       2407        832
+verify                           2636        708       1636       1317
+sign-verify                       996       1931       3480        497
+sign-rsa-pss                     1566       1200       2516        783
+sign-verify-rsa-pss              1007       1911       3447        503
+sign-sm2                         1445       1288       2743        722
+sign-verify-sm2                   754       2538       4590        377
+sign-ed25519                     2699        694       1594       1349
+sign-verify-ed25519              1207       1558       3100        603
+cms-build                        1524       1212       2700        762
+cms-parse                        2226        838       1917       1112
+cms-verify                       1894        976       2267        947
+cms-build-parse                   876       2173       4121        437
+scep-certrep-success             1136       1602       3440        568
+scep-certrep-failure             1534       1215       2642        766
+scep-certrep-pending             1566       1188       2502        783
+scep-parse-request               1309       1393       3061        654
+scep-certrep-verify              1972        950       2170        986
+scep-parse-build-success          608       3143       5802        303
+cmp-parse                        2410        776       1655       1205
+cmp-verify                       2381        783       1860       1190
+cmp-parse-verify                 1953        948       2371        976
+cmp-build                        1331       1380       3042        665
+
+#### 3 核 (clients=3)
+mode                              QPS     P50µs     P99µs    QPS/核
+------------------------------------------------------------------------
+sign                             2362       1148       2671        787
+verify                           3484        811       1689       1161
+sign-verify                      1416       2007       3668        472
+sign-rsa-pss                     2325       1172       2762        775
+sign-verify-rsa-pss              1391       2032       3974        463
+sign-sm2                         2155       1269       2781        718
+sign-verify-sm2                  1124       2538       4525        374
+sign-ed25519                     3360        827       1981       1120
+sign-verify-ed25519              1650       1731       3305        550
+cms-build                        2178       1253       2808        726
+cms-parse                        2999        930       2097        999
+cms-verify                       2724       1010       2396        908
+cms-build-parse                  1237       2288       4428        412
+scep-certrep-success             1719       1607       3424        572
+scep-certrep-failure             2184       1261       2789        728
+scep-certrep-pending             2242       1235       2849        747
+scep-parse-request               1945       1416       3195        648
+scep-certrep-verify              2750        992       2330        916
+scep-parse-build-success          913       3134       5559        304
+cmp-parse                        3169        882       2067       1056
+cmp-verify                       3213        872       1998       1071
+cmp-parse-verify                 2830        974       2345        943
+cmp-build                        1975       1397       3114        658
+
+=== 复现 ===
+  bash scripts/benchmark/run_wsl_suite_1cpu.sh   # OUT=benchmark_report_1cpu.txt
+  bash scripts/benchmark/run_wsl_suite_2cpu.sh   # OUT=benchmark_report_2cpu.txt
+  bash scripts/benchmark/run_wsl_suite_3cpu.sh   # OUT=benchmark_report_3cpu.txt
+  source scripts/benchmark/env_openssl.sh 35   # CMP + SM2 需 OpenSSL 3.x
+  bash scripts/benchmark/summarize_cpu_reports.sh

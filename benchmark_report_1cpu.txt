@@ -1,0 +1,657 @@
+=== CryptoOffload benchmark suite ===
+date: 2026-06-03T23:00:32+08:00
+addr: 127.0.0.1:50051
+clients: 1
+total_per_mode: 5000
+payload_bytes: 256
+server_profile: wsl-cpuset-0,server_cpus=1
+cpu_logical: 16
+cpu_model: AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+cpu_socket_cores: 
+cpu_threads_per_core: 
+process_cpuset: 0-15
+
+######## mode=sign ########
+=== benchmark environment ===
+hostname: Lenovo
+cpu_model: AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+cpu_physical_cores: 8
+cpu_logical_cores: 16
+process_cpuset: 0-15
+benchmark_clients: 1
+target_address: http://127.0.0.1:50051
+server_profile: wsl-cpuset-0,server_cpus=1
+note: clients=1 是客户端并发连接数；QPS 受服务端可见 CPU 核数、cpuset、OpenSSL 线程竞争影响
+
+cmp_fixture_der_bytes: 1120
+key_import_ms: 586.53 (one-time setup, excluded from qps)
+warmup 2s ...
+warmup done
+
+=== benchmark result ===
+mode: Sign
+total_requests: 5000
+clients: 1
+payload_bytes: 256
+cms_der_bytes: 2239
+cmp_pki_message_der_bytes: 1120
+elapsed_ms: 4977.61
+qps: 1004.50
+latency_us: p50=913 p95=1405 p99=2095
+
+######## mode=verify ########
+=== benchmark environment ===
+hostname: Lenovo
+cpu_model: AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+cpu_physical_cores: 8
+cpu_logical_cores: 16
+process_cpuset: 0-15
+benchmark_clients: 1
+target_address: http://127.0.0.1:50051
+server_profile: wsl-cpuset-0,server_cpus=1
+note: clients=1 是客户端并发连接数；QPS 受服务端可见 CPU 核数、cpuset、OpenSSL 线程竞争影响
+
+cmp_fixture_der_bytes: 1120
+key_import_ms: 332.04 (one-time setup, excluded from qps)
+warmup 2s ...
+warmup done
+
+=== benchmark result ===
+mode: Verify
+total_requests: 5000
+clients: 1
+payload_bytes: 256
+cms_der_bytes: 2239
+cmp_pki_message_der_bytes: 1120
+elapsed_ms: 2833.09
+qps: 1764.85
+latency_us: p50=533 p95=753 p99=1133
+
+######## mode=sign-verify ########
+=== benchmark environment ===
+hostname: Lenovo
+cpu_model: AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+cpu_physical_cores: 8
+cpu_logical_cores: 16
+process_cpuset: 0-15
+benchmark_clients: 1
+target_address: http://127.0.0.1:50051
+server_profile: wsl-cpuset-0,server_cpus=1
+note: clients=1 是客户端并发连接数；QPS 受服务端可见 CPU 核数、cpuset、OpenSSL 线程竞争影响
+
+cmp_fixture_der_bytes: 1120
+key_import_ms: 225.70 (one-time setup, excluded from qps)
+warmup 2s ...
+warmup done
+
+=== benchmark result ===
+mode: SignVerify
+total_requests: 5000
+clients: 1
+payload_bytes: 256
+cms_der_bytes: 2239
+cmp_pki_message_der_bytes: 1120
+elapsed_ms: 7949.80
+qps: 628.95
+latency_us: p50=1487 p95=2184 p99=2822
+
+######## mode=sign-rsa-pss ########
+=== benchmark environment ===
+hostname: Lenovo
+cpu_model: AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+cpu_physical_cores: 8
+cpu_logical_cores: 16
+process_cpuset: 0-15
+benchmark_clients: 1
+target_address: http://127.0.0.1:50051
+server_profile: wsl-cpuset-0,server_cpus=1
+note: clients=1 是客户端并发连接数；QPS 受服务端可见 CPU 核数、cpuset、OpenSSL 线程竞争影响
+
+cmp_fixture_der_bytes: 1120
+key_import_ms: 219.73 (one-time setup, excluded from qps)
+warmup 2s ...
+warmup done
+
+=== benchmark result ===
+mode: SignRsaPss
+total_requests: 5000
+clients: 1
+payload_bytes: 256
+cms_der_bytes: 2239
+cmp_pki_message_der_bytes: 1120
+elapsed_ms: 5149.98
+qps: 970.88
+latency_us: p50=939 p95=1461 p99=2191
+
+######## mode=sign-verify-rsa-pss ########
+=== benchmark environment ===
+hostname: Lenovo
+cpu_model: AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+cpu_physical_cores: 8
+cpu_logical_cores: 16
+process_cpuset: 0-15
+benchmark_clients: 1
+target_address: http://127.0.0.1:50051
+server_profile: wsl-cpuset-0,server_cpus=1
+note: clients=1 是客户端并发连接数；QPS 受服务端可见 CPU 核数、cpuset、OpenSSL 线程竞争影响
+
+cmp_fixture_der_bytes: 1120
+key_import_ms: 309.77 (one-time setup, excluded from qps)
+warmup 2s ...
+warmup done
+
+=== benchmark result ===
+mode: SignVerifyRsaPss
+total_requests: 5000
+clients: 1
+payload_bytes: 256
+cms_der_bytes: 2239
+cmp_pki_message_der_bytes: 1120
+elapsed_ms: 7876.81
+qps: 634.77
+latency_us: p50=1463 p95=2167 p99=2898
+
+######## mode=sign-sm2 ########
+=== benchmark environment ===
+hostname: Lenovo
+cpu_model: AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+cpu_physical_cores: 8
+cpu_logical_cores: 16
+process_cpuset: 0-15
+benchmark_clients: 1
+target_address: http://127.0.0.1:50051
+server_profile: wsl-cpuset-0,server_cpus=1
+note: clients=1 是客户端并发连接数；QPS 受服务端可见 CPU 核数、cpuset、OpenSSL 线程竞争影响
+
+cmp_fixture_der_bytes: 1120
+key_import_ms: 418.83 (one-time setup, excluded from qps)
+warmup 2s ...
+warmup done
+
+=== benchmark result ===
+mode: SignSm2
+total_requests: 5000
+clients: 1
+payload_bytes: 256
+cms_der_bytes: 2239
+cmp_pki_message_der_bytes: 1120
+elapsed_ms: 5722.03
+qps: 873.82
+latency_us: p50=1048 p95=1628 p99=2378
+
+######## mode=sign-verify-sm2 ########
+=== benchmark environment ===
+hostname: Lenovo
+cpu_model: AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+cpu_physical_cores: 8
+cpu_logical_cores: 16
+process_cpuset: 0-15
+benchmark_clients: 1
+target_address: http://127.0.0.1:50051
+server_profile: wsl-cpuset-0,server_cpus=1
+note: clients=1 是客户端并发连接数；QPS 受服务端可见 CPU 核数、cpuset、OpenSSL 线程竞争影响
+
+cmp_fixture_der_bytes: 1120
+key_import_ms: 374.88 (one-time setup, excluded from qps)
+warmup 2s ...
+warmup done
+
+=== benchmark result ===
+mode: SignVerifySm2
+total_requests: 5000
+clients: 1
+payload_bytes: 256
+cms_der_bytes: 2239
+cmp_pki_message_der_bytes: 1120
+elapsed_ms: 11216.75
+qps: 445.76
+latency_us: p50=2105 p95=3015 p99=3942
+
+######## mode=sign-ed25519 ########
+=== benchmark environment ===
+hostname: Lenovo
+cpu_model: AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+cpu_physical_cores: 8
+cpu_logical_cores: 16
+process_cpuset: 0-15
+benchmark_clients: 1
+target_address: http://127.0.0.1:50051
+server_profile: wsl-cpuset-0,server_cpus=1
+note: clients=1 是客户端并发连接数；QPS 受服务端可见 CPU 核数、cpuset、OpenSSL 线程竞争影响
+
+cmp_fixture_der_bytes: 1120
+key_import_ms: 293.22 (one-time setup, excluded from qps)
+warmup 2s ...
+warmup done
+
+=== benchmark result ===
+mode: SignEd25519
+total_requests: 5000
+clients: 1
+payload_bytes: 256
+cms_der_bytes: 2239
+cmp_pki_message_der_bytes: 1120
+elapsed_ms: 2949.71
+qps: 1695.08
+latency_us: p50=555 p95=770 p99=1199
+
+######## mode=sign-verify-ed25519 ########
+=== benchmark environment ===
+hostname: Lenovo
+cpu_model: AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+cpu_physical_cores: 8
+cpu_logical_cores: 16
+process_cpuset: 0-15
+benchmark_clients: 1
+target_address: http://127.0.0.1:50051
+server_profile: wsl-cpuset-0,server_cpus=1
+note: clients=1 是客户端并发连接数；QPS 受服务端可见 CPU 核数、cpuset、OpenSSL 线程竞争影响
+
+cmp_fixture_der_bytes: 1120
+key_import_ms: 364.68 (one-time setup, excluded from qps)
+warmup 2s ...
+warmup done
+
+=== benchmark result ===
+mode: SignVerifyEd25519
+total_requests: 5000
+clients: 1
+payload_bytes: 256
+cms_der_bytes: 2239
+cmp_pki_message_der_bytes: 1120
+elapsed_ms: 6886.84
+qps: 726.02
+latency_us: p50=1308 p95=1837 p99=2509
+
+######## mode=cms-build ########
+=== benchmark environment ===
+hostname: Lenovo
+cpu_model: AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+cpu_physical_cores: 8
+cpu_logical_cores: 16
+process_cpuset: 0-15
+benchmark_clients: 1
+target_address: http://127.0.0.1:50051
+server_profile: wsl-cpuset-0,server_cpus=1
+note: clients=1 是客户端并发连接数；QPS 受服务端可见 CPU 核数、cpuset、OpenSSL 线程竞争影响
+
+cmp_fixture_der_bytes: 1120
+key_import_ms: 323.89 (one-time setup, excluded from qps)
+warmup 2s ...
+warmup done
+
+=== benchmark result ===
+mode: CmsBuild
+total_requests: 5000
+clients: 1
+payload_bytes: 256
+cms_der_bytes: 2239
+cmp_pki_message_der_bytes: 1120
+elapsed_ms: 5691.49
+qps: 878.50
+latency_us: p50=1060 p95=1585 p99=2252
+
+######## mode=cms-parse ########
+=== benchmark environment ===
+hostname: Lenovo
+cpu_model: AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+cpu_physical_cores: 8
+cpu_logical_cores: 16
+process_cpuset: 0-15
+benchmark_clients: 1
+target_address: http://127.0.0.1:50051
+server_profile: wsl-cpuset-0,server_cpus=1
+note: clients=1 是客户端并发连接数；QPS 受服务端可见 CPU 核数、cpuset、OpenSSL 线程竞争影响
+
+cmp_fixture_der_bytes: 1120
+key_import_ms: 143.84 (one-time setup, excluded from qps)
+warmup 2s ...
+warmup done
+
+=== benchmark result ===
+mode: CmsParse
+total_requests: 5000
+clients: 1
+payload_bytes: 256
+cms_der_bytes: 2239
+cmp_pki_message_der_bytes: 1120
+elapsed_ms: 3823.24
+qps: 1307.79
+latency_us: p50=714 p95=1031 p99=1526
+
+######## mode=cms-verify ########
+=== benchmark environment ===
+hostname: Lenovo
+cpu_model: AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+cpu_physical_cores: 8
+cpu_logical_cores: 16
+process_cpuset: 0-15
+benchmark_clients: 1
+target_address: http://127.0.0.1:50051
+server_profile: wsl-cpuset-0,server_cpus=1
+note: clients=1 是客户端并发连接数；QPS 受服务端可见 CPU 核数、cpuset、OpenSSL 线程竞争影响
+
+cmp_fixture_der_bytes: 1120
+key_import_ms: 202.67 (one-time setup, excluded from qps)
+warmup 2s ...
+warmup done
+
+=== benchmark result ===
+mode: CmsVerify
+total_requests: 5000
+clients: 1
+payload_bytes: 256
+cms_der_bytes: 2239
+cmp_pki_message_der_bytes: 1120
+elapsed_ms: 4738.71
+qps: 1055.14
+latency_us: p50=869 p95=1375 p99=2066
+
+######## mode=cms-build-parse ########
+=== benchmark environment ===
+hostname: Lenovo
+cpu_model: AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+cpu_physical_cores: 8
+cpu_logical_cores: 16
+process_cpuset: 0-15
+benchmark_clients: 1
+target_address: http://127.0.0.1:50051
+server_profile: wsl-cpuset-0,server_cpus=1
+note: clients=1 是客户端并发连接数；QPS 受服务端可见 CPU 核数、cpuset、OpenSSL 线程竞争影响
+
+cmp_fixture_der_bytes: 1120
+key_import_ms: 441.26 (one-time setup, excluded from qps)
+warmup 2s ...
+warmup done
+
+=== benchmark result ===
+mode: CmsBuildParse
+total_requests: 5000
+clients: 1
+payload_bytes: 256
+cms_der_bytes: 2239
+cmp_pki_message_der_bytes: 1120
+elapsed_ms: 9362.96
+qps: 534.02
+latency_us: p50=1746 p95=2573 p99=3396
+
+######## mode=scep-certrep-success ########
+=== benchmark environment ===
+hostname: Lenovo
+cpu_model: AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+cpu_physical_cores: 8
+cpu_logical_cores: 16
+process_cpuset: 0-15
+benchmark_clients: 1
+target_address: http://127.0.0.1:50051
+server_profile: wsl-cpuset-0,server_cpus=1
+note: clients=1 是客户端并发连接数；QPS 受服务端可见 CPU 核数、cpuset、OpenSSL 线程竞争影响
+
+cmp_fixture_der_bytes: 1120
+key_import_ms: 276.76 (one-time setup, excluded from qps)
+warmup 2s ...
+warmup done
+
+=== benchmark result ===
+mode: ScepCertrepSuccessDefault
+total_requests: 5000
+clients: 1
+payload_bytes: 256
+cms_der_bytes: 2239
+cmp_pki_message_der_bytes: 1120
+elapsed_ms: 7183.61
+qps: 696.03
+latency_us: p50=1302 p95=2112 p99=3074
+
+######## mode=scep-certrep-failure ########
+=== benchmark environment ===
+hostname: Lenovo
+cpu_model: AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+cpu_physical_cores: 8
+cpu_logical_cores: 16
+process_cpuset: 0-15
+benchmark_clients: 1
+target_address: http://127.0.0.1:50051
+server_profile: wsl-cpuset-0,server_cpus=1
+note: clients=1 是客户端并发连接数；QPS 受服务端可见 CPU 核数、cpuset、OpenSSL 线程竞争影响
+
+cmp_fixture_der_bytes: 1120
+key_import_ms: 280.46 (one-time setup, excluded from qps)
+warmup 2s ...
+warmup done
+
+=== benchmark result ===
+mode: ScepCertrepFailure
+total_requests: 5000
+clients: 1
+payload_bytes: 256
+cms_der_bytes: 2239
+cmp_pki_message_der_bytes: 1120
+elapsed_ms: 5529.54
+qps: 904.23
+latency_us: p50=1012 p95=1588 p99=2230
+
+######## mode=scep-certrep-pending ########
+=== benchmark environment ===
+hostname: Lenovo
+cpu_model: AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+cpu_physical_cores: 8
+cpu_logical_cores: 16
+process_cpuset: 0-15
+benchmark_clients: 1
+target_address: http://127.0.0.1:50051
+server_profile: wsl-cpuset-0,server_cpus=1
+note: clients=1 是客户端并发连接数；QPS 受服务端可见 CPU 核数、cpuset、OpenSSL 线程竞争影响
+
+cmp_fixture_der_bytes: 1120
+key_import_ms: 282.49 (one-time setup, excluded from qps)
+warmup 2s ...
+warmup done
+
+=== benchmark result ===
+mode: ScepCertrepPending
+total_requests: 5000
+clients: 1
+payload_bytes: 256
+cms_der_bytes: 2239
+cmp_pki_message_der_bytes: 1120
+elapsed_ms: 5677.71
+qps: 880.64
+latency_us: p50=1036 p95=1676 p99=2427
+
+######## mode=scep-parse-request ########
+=== benchmark environment ===
+hostname: Lenovo
+cpu_model: AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+cpu_physical_cores: 8
+cpu_logical_cores: 16
+process_cpuset: 0-15
+benchmark_clients: 1
+target_address: http://127.0.0.1:50051
+server_profile: wsl-cpuset-0,server_cpus=1
+note: clients=1 是客户端并发连接数；QPS 受服务端可见 CPU 核数、cpuset、OpenSSL 线程竞争影响
+
+cmp_fixture_der_bytes: 1120
+key_import_ms: 379.16 (one-time setup, excluded from qps)
+warmup 2s ...
+warmup done
+
+=== benchmark result ===
+mode: ScepParseRequest
+total_requests: 5000
+clients: 1
+payload_bytes: 256
+cms_der_bytes: 2239
+cmp_pki_message_der_bytes: 1120
+elapsed_ms: 6676.90
+qps: 748.85
+latency_us: p50=1226 p95=1928 p99=2712
+
+######## mode=scep-certrep-verify ########
+=== benchmark environment ===
+hostname: Lenovo
+cpu_model: AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+cpu_physical_cores: 8
+cpu_logical_cores: 16
+process_cpuset: 0-15
+benchmark_clients: 1
+target_address: http://127.0.0.1:50051
+server_profile: wsl-cpuset-0,server_cpus=1
+note: clients=1 是客户端并发连接数；QPS 受服务端可见 CPU 核数、cpuset、OpenSSL 线程竞争影响
+
+cmp_fixture_der_bytes: 1120
+key_import_ms: 310.03 (one-time setup, excluded from qps)
+warmup 2s ...
+warmup done
+
+=== benchmark result ===
+mode: ScepCertrepVerify
+total_requests: 5000
+clients: 1
+payload_bytes: 256
+cms_der_bytes: 2239
+cmp_pki_message_der_bytes: 1120
+elapsed_ms: 4631.87
+qps: 1079.48
+latency_us: p50=824 p95=1416 p99=2323
+
+######## mode=scep-parse-build-success ########
+=== benchmark environment ===
+hostname: Lenovo
+cpu_model: AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+cpu_physical_cores: 8
+cpu_logical_cores: 16
+process_cpuset: 0-15
+benchmark_clients: 1
+target_address: http://127.0.0.1:50051
+server_profile: wsl-cpuset-0,server_cpus=1
+note: clients=1 是客户端并发连接数；QPS 受服务端可见 CPU 核数、cpuset、OpenSSL 线程竞争影响
+
+cmp_fixture_der_bytes: 1120
+key_import_ms: 505.25 (one-time setup, excluded from qps)
+warmup 2s ...
+warmup done
+
+=== benchmark result ===
+mode: ScepParseBuildSuccess
+total_requests: 5000
+clients: 1
+payload_bytes: 256
+cms_der_bytes: 2239
+cmp_pki_message_der_bytes: 1120
+elapsed_ms: 13893.89
+qps: 359.87
+latency_us: p50=2637 p95=3738 p99=4773
+
+######## mode=cmp-parse ########
+=== benchmark environment ===
+hostname: Lenovo
+cpu_model: AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+cpu_physical_cores: 8
+cpu_logical_cores: 16
+process_cpuset: 0-15
+benchmark_clients: 1
+target_address: http://127.0.0.1:50051
+server_profile: wsl-cpuset-0,server_cpus=1
+note: clients=1 是客户端并发连接数；QPS 受服务端可见 CPU 核数、cpuset、OpenSSL 线程竞争影响
+
+cmp_fixture_der_bytes: 1120
+key_import_ms: 242.21 (one-time setup, excluded from qps)
+warmup 2s ...
+warmup done
+
+=== benchmark result ===
+mode: CmpParse
+total_requests: 5000
+clients: 1
+payload_bytes: 256
+cms_der_bytes: 2239
+cmp_pki_message_der_bytes: 1120
+elapsed_ms: 3386.94
+qps: 1476.26
+latency_us: p50=625 p95=917 p99=1397
+
+######## mode=cmp-verify ########
+=== benchmark environment ===
+hostname: Lenovo
+cpu_model: AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+cpu_physical_cores: 8
+cpu_logical_cores: 16
+process_cpuset: 0-15
+benchmark_clients: 1
+target_address: http://127.0.0.1:50051
+server_profile: wsl-cpuset-0,server_cpus=1
+note: clients=1 是客户端并发连接数；QPS 受服务端可见 CPU 核数、cpuset、OpenSSL 线程竞争影响
+
+cmp_fixture_der_bytes: 1120
+key_import_ms: 506.84 (one-time setup, excluded from qps)
+warmup 2s ...
+warmup done
+
+=== benchmark result ===
+mode: CmpVerify
+total_requests: 5000
+clients: 1
+payload_bytes: 256
+cms_der_bytes: 2239
+cmp_pki_message_der_bytes: 1120
+elapsed_ms: 3481.65
+qps: 1436.10
+latency_us: p50=637 p95=961 p99=1453
+
+######## mode=cmp-parse-verify ########
+=== benchmark environment ===
+hostname: Lenovo
+cpu_model: AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+cpu_physical_cores: 8
+cpu_logical_cores: 16
+process_cpuset: 0-15
+benchmark_clients: 1
+target_address: http://127.0.0.1:50051
+server_profile: wsl-cpuset-0,server_cpus=1
+note: clients=1 是客户端并发连接数；QPS 受服务端可见 CPU 核数、cpuset、OpenSSL 线程竞争影响
+
+cmp_fixture_der_bytes: 1120
+key_import_ms: 449.93 (one-time setup, excluded from qps)
+warmup 2s ...
+warmup done
+
+=== benchmark result ===
+mode: CmpParseVerify
+total_requests: 5000
+clients: 1
+payload_bytes: 256
+cms_der_bytes: 2239
+cmp_pki_message_der_bytes: 1120
+elapsed_ms: 4113.09
+qps: 1215.63
+latency_us: p50=751 p95=1161 p99=1770
+
+######## mode=cmp-build ########
+=== benchmark environment ===
+hostname: Lenovo
+cpu_model: AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+cpu_physical_cores: 8
+cpu_logical_cores: 16
+process_cpuset: 0-15
+benchmark_clients: 1
+target_address: http://127.0.0.1:50051
+server_profile: wsl-cpuset-0,server_cpus=1
+note: clients=1 是客户端并发连接数；QPS 受服务端可见 CPU 核数、cpuset、OpenSSL 线程竞争影响
+
+cmp_fixture_der_bytes: 1120
+key_import_ms: 410.53 (one-time setup, excluded from qps)
+warmup 2s ...
+warmup done
+
+=== benchmark result ===
+mode: CmpBuild
+total_requests: 5000
+clients: 1
+payload_bytes: 256
+cms_der_bytes: 2239
+cmp_pki_message_der_bytes: 1120
+elapsed_ms: 6075.51
+qps: 822.98
+latency_us: p50=1115 p95=1726 p99=2396
+

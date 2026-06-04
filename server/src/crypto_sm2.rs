@@ -53,7 +53,7 @@ fn generate_private_key() -> Result<PKey<Private>> {
         if ctx.is_null() {
             bail!("EVP_PKEY_CTX_new_id(EC) failed");
         }
-        let ctx_guard = PkeyCtxGuard(ctx);
+        let _ctx_guard = PkeyCtxGuard(ctx);
         if EVP_PKEY_keygen_init(ctx) <= 0 {
             bail!("EVP_PKEY_keygen_init failed");
         }
@@ -90,7 +90,7 @@ pub fn sm2_sign_with_user_id(
         if mctx.is_null() {
             bail!("EVP_MD_CTX_new failed");
         }
-        let mctx_guard = MdCtxGuard(mctx);
+        let _mctx_guard = MdCtxGuard(mctx);
 
         let mut pctx: *mut openssl_sys::EVP_PKEY_CTX = ptr::null_mut();
         if EVP_DigestSignInit(
@@ -141,7 +141,7 @@ pub fn sm2_verify_with_user_id(
         if mctx.is_null() {
             bail!("EVP_MD_CTX_new failed");
         }
-        let mctx_guard = MdCtxGuard(mctx);
+        let _mctx_guard = MdCtxGuard(mctx);
 
         let mut pctx: *mut openssl_sys::EVP_PKEY_CTX = ptr::null_mut();
         // 与 PkiSdk 一致：验签 init 时 md 传 null，再从 pctx 设置 SM2 id

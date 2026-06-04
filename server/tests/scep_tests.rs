@@ -607,3 +607,69 @@ fn scep_build_success_certrep_password_envelope() {
     .expect("decrypt certrep");
     assert!(!plain.is_empty());
 }
+
+// ---------- 国密 GM 真·SM2 证书测试（OpenSSL 3.5.6 test/certs fixture） ----------
+
+/// 从 `testdata/sm2/` 加载 OpenSSL 自带的 SM2 测试证书 DER。
+fn load_sm2_testdata_certs() -> (Vec<u8>, Vec<u8>) {
+    let sign_der = include_bytes!("../testdata/sm2/sm2-cert.der").to_vec();
+    let enc_der = include_bytes!("../testdata/sm2/sm2-ca-cert.der").to_vec();
+    (sign_der, enc_der)
+}
+
+#[test]
+fn scep_build_gm_success_certrep_real_sm2_certs() {
+    init_scep_test_openssl();
+
+    use crypto_offload_server::{pkey_util, scep_certrep};
+
+    let store = KeyStore::new();
+    let (ca_id, _) = import_ca(&store, "scep-ca-gm-sm2-real");
+    let (sign_der, enc_der) = load_sm2_testdata_certs();
+    let (_wrapper_pem, wrapper_der) = generate_rsa2048_der_cert().expect("wrapper");
+    let skf = b"dGVzdC1za2YtYmFzZTY0";
+
+    // 验证加载的证书确实是 SM2
+    let sign_cert = X509::from_der(&sign_der).expect("parse sign cert");
+    let enc_cert = X509::from_der(&enc_der).expect("parse enc cert");
+    assert!(
+        pkey_util::is_sm2(sign_cert.public_key().as_ref().expect("sign pub")),
+        "sign cert must be SM2"
+    );
+    assert!(
+        pkey_util::is_sm2(enc_cert.public_key().as_ref().expect("enc pub")),
+        "enc cert must be SM2"
+    );
+
+    // 内层 SignedData：双证书 + SKF
+    let inner = scep_certrep::build_gm_inner_signed_data(&sign_cert, &enc_cert, skf)
+        .expect("GM inner SignedData");
+    assert!(
+        inner.windows(skf.len()).any(|w| w == skf),
+        "inner SignedData must embed SKF bytes"
+    );
+    assert!(inner.len() > sign_der.len() + enc_der.len());
+
+    // 完整 CertRep
+    let access = store.access_key(&ca_id).expect("access ca");
+    let certrep = crypto_scep::build_gm_success_certrep(
+        access,
+        "tx-gm-sm2-real",
+        &[0x01],
+        &[],
+        &sign_der,
+        &enc_der,
+        skf,
+        &wrapper_der,
+        ENVELOPE_AES128_CBC,
+        None,
+    )
+    .expect("GM success CertRep with real SM2 certs");
+    assert!(!certrep.is_empty());
+
+    // 验证外层 PKCS7 可解析
+    let outer = openssl::pkcs7::Pkcs7::from_der(&certrep).expect("parse CertRep");
+    let enveloped = crypto_offload_server::scep_pkio::extract_signed_content(&outer)
+        .expect("extract inner envelope");
+    assert!(!enveloped.is_empty(), "inner envelope must be non-empty");
+}

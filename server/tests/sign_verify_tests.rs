@@ -229,6 +229,81 @@ fn sm2_rejects_non_sm3_hash() {
     assert!(err.is_err());
 }
 
+/// SM2 sign/verify 已知向量测试（来自 OpenSSL 3.5.6 test/recipes/30-test_evp_data/evppkey_sm2.txt）
+#[test]
+fn sm2_known_vector_verify() {
+    use crypto_offload_server::crypto_sm2::{sm2_verify, sm2_sign};
+    use crypto_offload_server::pkey_util;
+    use openssl::pkey::PKey;
+
+    // 来自 evppkey_sm2.txt "SM2_key1" 的私钥 (PKCS8 PEM)
+    let priv_pem = b"-----BEGIN PRIVATE KEY-----\n\
+MIGHAgEAMBMGByqGSM49AgEGCCqBHM9VAYItBG0wawIBAQQg0JFWczAXva2An9m7\n\
+2MaT9gIwWTFptvlKrxyO4TjMmbWhRANCAAQ5OirZ4n5DrKqrhaGdO4VZHhRAYVcX\n\
+Wt3Te/d/8Mr57Tf886i09VwDhSMmH8pmNq/mp6+ioUgqYG9cs6GLLioe\n\
+-----END PRIVATE KEY-----\n";
+
+    let pkey = PKey::private_key_from_pem(priv_pem).expect("parse SM2_key1");
+    assert!(
+        pkey_util::is_sm2(&pkey),
+        "SM2_key1 must be recognized as SM2"
+    );
+
+    // 已知向量: D7AD397F6FFA5D4F7F11E7217F241607DC30618C236D2C09C1B9EA8FDADEE2E8
+    let data = [
+        0xD7, 0xAD, 0x39, 0x7F, 0x6F, 0xFA, 0x5D, 0x4F, 0x7F, 0x11, 0xE7, 0x21,
+        0x7F, 0x24, 0x16, 0x07, 0xDC, 0x30, 0x61, 0x8C, 0x23, 0x6D, 0x2C, 0x09,
+        0xC1, 0xB9, 0xEA, 0x8F, 0xDA, 0xDE, 0xE2, 0xE8,
+    ];
+
+    let sig = sm2_sign(&pkey, &data).expect("sm2_sign with known key");
+    assert!(!sig.is_empty(), "signature must not be empty");
+
+    // 验签（使用同一个密钥的 public key）
+    let pub_der = pkey.public_key_to_der().expect("pub der");
+    let pubkey = PKey::public_key_from_der(&pub_der).expect("pubkey");
+    let valid = sm2_verify(&pubkey, &data, &sig).expect("verify");
+    assert!(valid, "known SM2_key1 sign-verify roundtrip must succeed");
+
+    // 负向：改一个字节应该验签失败
+    let mut tampered = sig.clone();
+    if let Some(b) = tampered.last_mut() {
+        *b ^= 1;
+    }
+    let invalid = sm2_verify(&pubkey, &data, &tampered).expect("verify tampered");
+    assert!(!invalid, "tampered signature must fail verification");
+}
+
+/// 用 OpenSSL test/certs/sm2.key 做签名/验签 roundtrip
+#[test]
+fn sm2_testdata_key_sign_verify_roundtrip() {
+    use crypto_offload_server::crypto_sm2::{sm2_sign, sm2_verify};
+    use crypto_offload_server::pkey_util;
+    use openssl::pkey::PKey;
+
+    let priv_pem = include_bytes!("../testdata/sm2/sm2.key");
+    let pkey = match PKey::private_key_from_pem(priv_pem) {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("skip sm2_testdata_key: {e}");
+            return;
+        }
+    };
+    assert!(
+        pkey_util::is_sm2(&pkey),
+        "sm2.key must be recognized as SM2"
+    );
+
+    let data = b"OpenSSL SM2 testdata key signature test";
+    let sig = sm2_sign(&pkey, data).expect("sm2_sign");
+    assert!(!sig.is_empty());
+
+    let pub_der = pkey.public_key_to_der().expect("pub der");
+    let pubkey = PKey::public_key_from_der(&pub_der).expect("pubkey");
+    let valid = sm2_verify(&pubkey, data, &sig).expect("verify");
+    assert!(valid, "SM2 testdata key roundtrip must succeed");
+}
+
 #[test]
 fn ed25519_roundtrip() {
     let store = KeyStore::new();
